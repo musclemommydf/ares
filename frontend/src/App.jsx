@@ -57,6 +57,7 @@ import { useSessionAutosave } from './hooks/useSessionAutosave'
 import EditableLabel from './components/Common/EditableLabel'
 import ExtraTransmitters from './components/Controls/ExtraTransmitters'
 import RadarTargetPicker from './components/Controls/RadarTargetPicker'
+import BestSiteSidebar from './components/Controls/BestSiteSidebar'
 import ToolBtn from './components/Common/ToolBtn'
 
 import {
@@ -1318,66 +1319,15 @@ export default function App() {
 
         {/* Best Site (candidates) */}
         {activeTab === 'best_site' && (
-          <div style={{ borderTop: '1px solid #21262d', padding: '8px 12px' }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8 }}>
-              CANDIDATE SITES
-            </div>
-            {bestSiteCandidates.length === 0 && (
-              <div style={{ fontSize: 11, color: '#444d56', marginBottom: 8 }}>
-                Click the map to add candidate sites. At least 2 required.
-              </div>
-            )}
-            {bestSiteCandidates.map((c, i) => (
-              <div key={i} style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                marginBottom: 4, padding: '4px 6px',
-                background: '#0d1117', borderRadius: 4, border: '1px solid #21262d',
-              }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />
-                <div style={{ flex: 1, fontSize: 11, color: '#c9d1d9' }}>
-                  {c.label || `Site ${i + 1}`}
-                  <span style={{ color: '#444d56', marginLeft: 4 }}>
-                    {c.lat.toFixed(4)}, {c.lon.toFixed(4)}
-                  </span>
-                </div>
-                {bestSiteResult?.sites && (() => {
-                  const s = bestSiteResult.sites.find(s => Math.abs(s.lat - c.lat) < 0.0001)
-                  return s ? <span style={{ fontSize: 10, color: '#06d6a0' }}>{s.covered_area_km2} km²</span> : null
-                })()}
-                <button
-                  className="btn btn-ghost"
-                  style={{ padding: '1px 4px', color: '#ef4444' }}
-                  onClick={() => setBestSiteCandidates(prev => prev.filter((_, j) => j !== i))}
-                >
-                  <X size={11} />
-                </button>
-              </div>
-            ))}
-            <button
-              className="btn btn-secondary"
-              style={{ width: '100%', gap: 6, fontSize: 11, marginTop: 4 }}
-              onClick={() => setBestSiteCandidates(prev => [
-                ...prev,
-                { lat: tx.lat + (prev.length % 2 === 0 ? 0.05 : -0.05), lon: tx.lon + (prev.length % 2 === 0 ? 0.05 : -0.05), height_m: tx.height_m, label: `Site ${prev.length + 1}` },
-              ])}
-            >
-              <Plus size={12} /> Add from TX
-            </button>
-            {bestSiteResult?.sites && (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 4 }}>RANKING</div>
-                {bestSiteResult.sites.map((s, i) => (
-                  <div key={i} style={{
-                    display: 'flex', justifyContent: 'space-between',
-                    fontSize: 11, padding: '2px 0', borderBottom: '1px solid #21262d',
-                  }}>
-                    <span style={{ color: i === 0 ? '#06d6a0' : '#c9d1d9' }}>{i + 1}. {s.label}</span>
-                    <span style={{ color: '#8b949e' }}>{s.covered_area_km2} km² · {s.avg_signal_dbm} dBm</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <BestSiteSidebar
+            candidates={bestSiteCandidates}
+            result={bestSiteResult}
+            onRemove={(i) => setBestSiteCandidates(prev => prev.filter((_, j) => j !== i))}
+            onAddFromTx={() => setBestSiteCandidates(prev => [
+              ...prev,
+              { lat: tx.lat + (prev.length % 2 === 0 ? 0.05 : -0.05), lon: tx.lon + (prev.length % 2 === 0 ? 0.05 : -0.05), height_m: tx.height_m, label: `Site ${prev.length + 1}` },
+            ])}
+          />
         )}
 
         {/* Radar target */}
