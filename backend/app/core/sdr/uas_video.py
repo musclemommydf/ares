@@ -111,9 +111,47 @@ def _capture_iq(device: dict, center_hz: float, rate_hz: float, n_samples: int, 
             buf[got:got + n] = chunk[:n]
             got += n
         dev.deactivateStream(st); dev.closeStream(st)
-        return buf[:got] if got else None
+        if got:
+            return buf[:got]
     except Exception:
-        return None
+        pass
+    # no real source — a representative synthetic snapshot, shaped per the channel plan, so the
+    # IQ-domain stages (and any registered ML classifier) still run offline. Always tagged "synthetic".
+    return _synthetic_iq(device, center_hz, rate_hz, n_samples, channel)
+
+
+def _synthetic_iq(device: Optional[dict], center_hz: float, rate_hz: float, n_samples: int, channel: int = 0) -> np.ndarray:
+    """A representative IQ snapshot for offline use — shaped per the catalogued UAS/FPV channel plan at
+    ``center_hz`` (FM analog video / COFDM / single-carrier QAM/PSK / noise). Deterministic per (freq, rate).
+    Not a substitute for a real capture layer; everything that consumes it is tagged ``synthetic``."""
+    n = max(4096, min(1 << 20, int(n_samples)))
+    rng = np.random.default_rng((int(center_hz) ^ int(rate_hz) ^ (int(channel) << 8) ^ 0xA5A5) & 0xFFFFFFFF)
+    noise = ((rng.standard_normal(n) + 1j * rng.standard_normal(n)).astype(np.complex64)) * np.float32(0.05)
+    fids = ((_channel_plan_for(center_hz) or {}).get("likely_feed_types")) or []
+    has = lambda *subs: any(any(sub in f for sub in subs) for f in fids)
+    if has("fm_analog_video"):
+        t = np.arange(n) / float(rate_hz)
+        line = 15734.0
+        msg = 0.6 * (2 * (t * line - np.floor(0.5 + t * line))) + 0.3 * np.sin(2 * np.pi * 60.0 * t) + 0.10 * rng.standard_normal(n)
+        ph = np.cumsum(msg) * (2 * np.pi * (rate_hz * 0.15) / rate_hz)
+        return (np.exp(1j * ph).astype(np.complex64) + noise)
+    if has("dvbt", "cofdm", "ocusync", "hdzero", "walksnail", "isdbt", "lightbridge"):
+        fft_len, cp = (2048, 512) if has("dvbt", "isdbt", "cofdm") else (256, 64)
+        parts = []
+        while sum(len(p_) for p_ in parts) < n + fft_len:
+            X = ((rng.integers(0, 2, fft_len) * 2 - 1) + 1j * (rng.integers(0, 2, fft_len) * 2 - 1)).astype(np.complex64)
+            xt = np.fft.ifft(X)
+            parts.append(np.concatenate([xt[-cp:], xt]))
+        x = np.concatenate(parts)[:n].astype(np.complex64)
+        return x / np.float32(np.sqrt(np.mean(np.abs(x) ** 2)) + 1e-9) + noise
+    if has("dvbs", "qam", "cdl"):
+        sps = 4
+        syms = np.exp(1j * (rng.integers(0, 4, n // sps + 2) * (np.pi / 2) + np.pi / 4)).astype(np.complex64)
+        up = np.zeros((n // sps + 2) * sps, np.complex64); up[::sps] = syms
+        h = np.hanning(2 * sps + 1).astype(np.complex64)
+        x = np.convolve(up, h, "same")[:n].astype(np.complex64)
+        return x / np.float32(np.sqrt(np.mean(np.abs(x) ** 2)) + 1e-9) + noise
+    return noise * np.float32(2.0)
 
 
 # Map a registered device's "kind" to a SoapySDR driver hint.
@@ -722,7 +760,7 @@ def _capture_backend() -> str:
         import SoapySDR  # type: ignore  # noqa: F401
         return "soapysdr"
     except Exception:
-        return "synthetic"
+        return "synthetic_iq"
 
 
 def _pick_tool_chain(feed_type: str, decoders: dict) -> tuple[list[str], list[str]]:
