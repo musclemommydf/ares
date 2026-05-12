@@ -43,6 +43,7 @@ import { groupLoBsByFrequency, lobGroupKey, computeGroupIntersections, computeCe
 import { useGeolocation } from './hooks/useGeolocation'
 import { useBottomPanelResize } from './hooks/useBottomPanelResize'
 import { useNumberFieldSelectAll } from './hooks/useNumberFieldSelectAll'
+import { useTerrainGrid } from './hooks/useTerrainGrid'
 import { DEFAULT_TX, DEFAULT_RX, DEFAULT_PROPAGATION, DEFAULT_ATMOSPHERE, RADAR_TARGETS, TX_COLORS } from './appDefaults'
 import { SESSION_KEY, loadSession } from './session'
 import EditableLabel from './components/Common/EditableLabel'
@@ -53,7 +54,7 @@ import {
   simulateRoute, simulateMultipoint, simulateManet, simulateBestServer,
   simulateInterference, simulateSuperLayer, simulateBestSitePolygon,
   simulateRayTrace, simulateSatelliteVisibility,
-  getBuildings, getTerrainGrid,
+  getBuildings,
 } from './api/client'
 import ThreeDView from './components/Charts/ThreeDView'
 
@@ -159,8 +160,7 @@ export default function App() {
   const [buildingGeoJSON, setBuildingGeoJSON] = useState(null)
 
   // ── 3D terrain grid ───────────────────────────────────────────────────────
-  const [terrainGrid, setTerrainGrid] = useState(null)
-  const [terrainGridLoading, setTerrainGridLoading] = useState(false)
+  const { terrainGrid, terrainGridLoading } = useTerrainGrid(tx, propagation, bottomTab)
 
   // ── Bottom panel resize ───────────────────────────────────────────────────
   const { bottomPanelHeight, setBottomPanelHeight, handleResizeMouseDown } =
@@ -290,17 +290,6 @@ export default function App() {
       .then(d => setSpaceWeather(d.data))
       .catch(() => {})
   }, [])
-
-  // ── Fetch terrain grid when 3D tab becomes active ─────────────────────────
-  useEffect(() => {
-    if (bottomTab !== '3d') return
-    setTerrainGridLoading(true)
-    const r = Math.min(propagation.radius_km ?? 50, 30)
-    getTerrainGrid(tx.lat, tx.lon, r, 30)
-      .then(g => setTerrainGrid(g))
-      .catch(() => setTerrainGrid(null))
-      .finally(() => setTerrainGridLoading(false))
-  }, [bottomTab, tx.lat, tx.lon])
 
   // ── Auto-select propagation model ────────────────────────────────────────
   const resolveModelFast = (txConfig, propConfig) => {
