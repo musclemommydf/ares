@@ -406,6 +406,18 @@ def test_video_exploit():
     check("classify_modulation calls a pulse-shaped QPSK signal single-carrier (PSK/QAM)", mq.get("family") in ("PSK", "QAM"))
     check("classify_modulation handles a too-short snapshot gracefully", ve.classify_modulation(np.zeros(100, np.complex64), 1e6).get("family") == "unknown")
     check("video_exploit status is coherent", "ts_demux" in ve.status() and "iq_backend" in ve.status())
+    # optional ML / GPU hooks for signal identification
+    check("gpu_available() returns a bool", isinstance(u.gpu_available(), bool) and isinstance(ve.status().get("gpu_acceleration"), bool))
+    check("no ML classifier registered by default", u.ML_CLASSIFIER is None and ve.status().get("ml_classifier") is False)
+    u.set_ml_classifier(lambda x, fs, band=None: {"feed_type": "dvbt2", "confidence": 0.9, "model": "harness-stub"})
+    try:
+        mo2 = ve.classify_modulation(np.random.default_rng(3).standard_normal((20000, 2)).view(np.complex128).astype(np.complex64).ravel(), 8e6)
+        check("a registered ML classifier is attached as a second opinion (out[\"ml\"])",
+              isinstance(mo2.get("ml"), dict) and mo2["ml"].get("feed_type") == "dvbt2" and ve.status().get("ml_classifier") is True)
+    finally:
+        u.set_ml_classifier(None)
+    check("classify_modulation has no ml field once the classifier is cleared",
+          "ml" not in ve.classify_modulation(np.zeros(8000, np.complex64) + 0.1, 8e6) and ve.status().get("ml_classifier") is False)
 
 
 # ── Remote ID / DJI DroneID telemetry-beacon demux ──────────────────────────

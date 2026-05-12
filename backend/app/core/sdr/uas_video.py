@@ -41,12 +41,45 @@ from . import dsp
 
 # ── IQ provider hook (parallel to dsp.SPECTRUM_PROVIDER) ─────────────────────
 IQ_PROVIDER: Optional[Callable] = None
+# Optional pluggable ML signal classifier — ``fn(iq: np.ndarray, fs: float, *, band: dict|None=None) -> dict``
+# returning at least ``{"feed_type": str, "confidence": float, ...}``. When registered (e.g. by a deployment
+# that ships a trained CNN over spectrograms / the spectral-correlation function, plus torch/onnxruntime),
+# its verdict is ENSEMBLED with the rule-based one — it boosts/agrees/adds-an-alternative, it does not silently
+# override — and runs on the GPU when CuPy is present. Absent, the heuristic classifier is used as-is.
+ML_CLASSIFIER: Optional[Callable] = None
 
 
 def set_iq_provider(fn: Optional[Callable]) -> None:
     """Register a callable ``fn(device, center_hz, rate_hz, n_samples, channel) -> np.ndarray[complex]``."""
     global IQ_PROVIDER
     IQ_PROVIDER = fn
+
+
+def set_ml_classifier(fn: Optional[Callable]) -> None:
+    """Register (or clear) the optional ML signal classifier — see ``ML_CLASSIFIER``."""
+    global ML_CLASSIFIER
+    ML_CLASSIFIER = fn
+
+
+def gpu_available() -> bool:
+    """True if CuPy + a CUDA device are usable (the FFT/correlation DSP and an ML stage can offload to it)."""
+    try:
+        import cupy  # type: ignore
+        return cupy.cuda.runtime.getDeviceCount() > 0
+    except Exception:
+        return False
+
+
+def _xp():
+    """Return CuPy if a CUDA device is available, else NumPy — for the heavy FFT/correlation paths.
+    (Kept opt-in: only worth it for wideband / continuous / multi-channel processing.)"""
+    try:
+        import cupy  # type: ignore
+        if cupy.cuda.runtime.getDeviceCount() > 0:
+            return cupy
+    except Exception:
+        pass
+    return np
 
 
 def _capture_iq(device: dict, center_hz: float, rate_hz: float, n_samples: int, channel: int = 0) -> Optional[np.ndarray]:
@@ -529,6 +562,15 @@ def _classify_segment(f_lo, f_hi, peak, mean, std, seg, iq_features: Optional[di
                 cand.append((fid, 0.3))
     if not cand:
         cand.append(("unknown_digital" if is_flat else "unknown_analog", 0.3))
+    ml = (iq_features or {}).get("ml") if iq_features else None
+    if isinstance(ml, dict) and ml.get("feed_type") in _FEED_BY_ID:
+        mc = float(ml.get("confidence", 0.5))
+        # if the ML agrees with a heuristic candidate, average-up; otherwise add it as a candidate.
+        seen = {fid for fid, _ in cand}
+        if ml["feed_type"] in seen:
+            cand.append((ml["feed_type"], min(0.97, 0.5 * (mc + max(c for fid, c in cand if fid == ml["feed_type"])) + 0.15)))
+        else:
+            cand.append((ml["feed_type"], min(0.95, mc)))
     # pick best per fid
     best: dict[str, float] = {}
     for fid, c in cand:
@@ -544,6 +586,7 @@ def _classify_segment(f_lo, f_hi, peak, mean, std, seg, iq_features: Optional[di
         "confidence": round(min(0.95, best[fid]), 2),
         "alternatives": [{"feed_type": k, "confidence": c} for k, c in alts],
         "channel_plan": plan, "flatness": round(flat, 2),
+        "ml": ((iq_features or {}).get("ml") if iq_features else None),
         "action": "decode" if f["decodable"] else "characterize",
     }
 
@@ -578,6 +621,11 @@ def _iq_features(device: dict, center_hz: float, bw_hz: float) -> Optional[dict]
         peak = float(P[band].max()); med = float(np.median(P[(f > 5e3) & (f < 50e3)]) + 1e-9)
         feat["fm_video_line_rate"] = peak / med > 6.0
         feat["fm_line_ratio"] = round(peak / med, 2)
+    if ML_CLASSIFIER is not None:
+        try:
+            feat["ml"] = ML_CLASSIFIER(x, rate, band={"center_hz": center_hz, "bandwidth_hz": bw_hz})
+        except Exception:
+            pass
     return feat
 
 
@@ -820,6 +868,8 @@ def status() -> dict:
         "capture_backend": _capture_backend(),
         "active_sessions": len(_SESSIONS),
         "misb_0601": "parse+encode (ST 0601, STANAG 4609 UAS Datalink LS), with checksum",
+        "gpu_acceleration": gpu_available(),
+        "ml_classifier": (ML_CLASSIFIER is not None),
         "encrypted_video": "OcuSync / Lightbridge / CDL — detect & geolocate only; no public passive decrypt. "
                            "Use the Remote ID / DroneID telemetry beacon (decodable) to ID & locate the drone + operator.",
     }
