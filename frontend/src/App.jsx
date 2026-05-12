@@ -39,6 +39,7 @@ import TerrainProfile from './components/Charts/TerrainProfile'
 import DfPanel from './components/Panels/DfPanel'
 import ChatPanel from './components/Panels/ChatPanel'
 import EmitterSummary from './components/Panels/EmitterSummary'
+import SavedLocations from './components/Panels/SavedLocations'
 import UasVideoPanel from './components/Tools/UasVideoPanel'
 import HelpPanel from './components/Common/HelpPanel'
 import DecibelCalculator from './components/Tools/DecibelCalculator'
@@ -1719,48 +1720,11 @@ export default function App() {
           )}
 
           {bottomTab === 'savedlocs' && (
-            <div style={{ padding: '12px 16px', flex: 1, minHeight: 0, overflowY: 'auto' }}>
-              {savedLocations.length === 0 ? (
-                <div style={{ fontSize: 12, color: '#484f58', textAlign: 'center', marginTop: 24 }}>
-                  No saved locations yet. Search for a place on the map and click ★ to save it.
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {savedLocations.map(loc => (
-                    <div key={loc.id} style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      background: '#0d1117', border: '1px solid #21262d', borderRadius: 6,
-                      padding: '7px 10px',
-                    }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, color: '#e6edf3', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {loc.name}
-                        </div>
-                        <div style={{ fontSize: 10, color: '#484f58' }}>
-                          {loc.lat.toFixed(5)}, {loc.lon.toFixed(5)}
-                        </div>
-                      </div>
-                      <button
-                        className="btn btn-ghost"
-                        style={{ padding: '3px 8px', fontSize: 11, flexShrink: 0 }}
-                        title="Fly to this location"
-                        onClick={() => setFlyToTarget({ lat: loc.lat, lon: loc.lon, zoom: 12, _t: Date.now() })}
-                      >
-                        ⊕
-                      </button>
-                      <button
-                        className="btn btn-ghost"
-                        style={{ padding: '3px 6px', color: '#ef4444', flexShrink: 0 }}
-                        title="Remove"
-                        onClick={() => handleRemoveSavedLocation(loc.id)}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <SavedLocations
+              locations={savedLocations}
+              onFlyTo={(lat, lon) => setFlyToTarget({ lat, lon, zoom: 12, _t: Date.now() })}
+              onRemove={handleRemoveSavedLocation}
+            />
           )}
 
           {bottomTab === 'spacewx' && spaceWeather && (() => {
