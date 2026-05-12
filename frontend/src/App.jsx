@@ -60,6 +60,7 @@ import { useTerrainGrid } from './hooks/useTerrainGrid'
 import { DEFAULT_TX, DEFAULT_RX, DEFAULT_PROPAGATION, DEFAULT_ATMOSPHERE, RADAR_TARGETS, TX_COLORS } from './appDefaults'
 import { SESSION_KEY, loadSession } from './session'
 import { useSessionAutosave } from './hooks/useSessionAutosave'
+import { useSimulationState } from './hooks/useSimulationState'
 import EditableLabel from './components/Common/EditableLabel'
 import ExtraTransmitters from './components/Controls/ExtraTransmitters'
 import RadarTargetPicker from './components/Controls/RadarTargetPicker'
@@ -125,8 +126,7 @@ export default function App() {
   const [spaceWeather, setSpaceWeather] = useState(null)
   const [warnings, setWarnings] = useState([])
 
-  const [isSimulating, setIsSimulating] = useState(false)
-  const [progress, setProgress] = useState(0)
+  const { isSimulating, setIsSimulating, progress, setProgress, abortRef } = useSimulationState()
   const [activeTab, setActiveTab] = useState(() => _s?.ui?.activeTab ?? 'coverage')
   const [bottomTab, setBottomTab] = useState(() => {
     const t = _s?.ui?.bottomTab
@@ -245,7 +245,6 @@ export default function App() {
   // ── Satellite ────────────────────────────────────────────────────────────
   const [satToolActive, setSatToolActive] = useState(false)
 
-  const abortRef = useRef(null)
   const menuRef = useRef(null)
   const mapImportApiRef = useRef(null)
 
