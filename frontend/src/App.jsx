@@ -23,6 +23,7 @@ import LayerManagerPanel from './components/Map/LayerManagerPanel'
 import { useViewMode } from './hooks/useViewMode'
 import AtakServerPanel from './components/Tools/AtakServerPanel'
 import AppModals from './components/AppModals'
+import OverflowMenu from './components/Header/OverflowMenu'
 import SdrPanel from './components/Tools/SdrPanel'
 import { useUserLayers } from './hooks/useUserLayers'
 import { useStandaloneTerrainProfile } from './hooks/useStandaloneTerrainProfile'
@@ -1146,92 +1147,29 @@ export default function App() {
             <Menu size={16} />
           </button>
 
-          {menuOpen && (
-            <div
-              style={{
-                position: 'absolute', top: '110%', left: 0, zIndex: 9999,
-                background: '#161b22', border: '1px solid #30363d', borderRadius: 8,
-                minWidth: 210, boxShadow: '0 6px 20px rgba(0,0,0,0.7)',
-                padding: '4px 0',
-              }}
-              onClick={() => setMenuOpen(false)}
-            >
-              <div style={{ fontSize: 10, color: '#484f58', padding: '3px 14px', letterSpacing: 0.7, fontWeight: 600 }}>
-                EDIT
-              </div>
-              <button className="overflow-menu-item" disabled={undoStackRef.current.length === 0} onClick={undo}>
-                <Undo2 size={13} /> Undo
-                <span style={{ marginLeft: 'auto', fontSize: 10, color: '#484f58' }}>Ctrl+Z</span>
-              </button>
-              <button className="overflow-menu-item" disabled={redoStackRef.current.length === 0} onClick={redo}>
-                <Redo2 size={13} /> Redo
-                <span style={{ marginLeft: 'auto', fontSize: 10, color: '#484f58' }}>Ctrl+R</span>
-              </button>
-              {/* read undoTick so the disabled state stays in sync */}
-              <span style={{ display: 'none' }}>{undoTick}</span>
-
-              {mainMode === 'propagation' && <>
-                <div style={{ height: 1, background: '#21262d', margin: '4px 0' }} />
-
-                <div style={{ fontSize: 10, color: '#484f58', padding: '3px 14px', letterSpacing: 0.7, fontWeight: 600 }}>
-                  ANALYSIS TOOLS
-                </div>
-
-                <button className="overflow-menu-item"
-                  onClick={() => setDrawMode(m => m === 'bounds' ? null : 'bounds')}>
-                  <Square size={13} style={{ color: drawMode === 'bounds' ? '#a855f7' : undefined }} />
-                  Draw Bounds{drawMode === 'bounds' ? ' ✓' : ''}
-                </button>
-
-                <button className="overflow-menu-item" disabled={isSimulating}
-                  onClick={runInterference}>
-                  <Layers size={13} /> Interference Analysis
-                </button>
-
-                <button className="overflow-menu-item" disabled={isSimulating}
-                  onClick={runSuperLayer}>
-                  <GitMerge size={13} /> Super Layer
-                </button>
-
-                <button className="overflow-menu-item"
-                  onClick={() => setSatToolActive(s => !s)}>
-                  <Satellite size={13} style={{ color: satToolActive ? '#06d6a0' : undefined }} />
-                  Satellite Visibility{satToolActive ? ' ✓' : ''}
-                </button>
-
-                <button className="overflow-menu-item"
-                  onClick={() => setArchiveOpen(true)}>
-                  <Archive size={13} /> Archive
-                </button>
-              </>}
-
-              <div style={{ height: 1, background: '#21262d', margin: '4px 0' }} />
-
-              <div style={{ fontSize: 10, color: '#484f58', padding: '3px 14px', letterSpacing: 0.7, fontWeight: 600 }}>
-                FILE
-              </div>
-
-              <button className="overflow-menu-item" onClick={handleSaveState}>
-                <Save size={13} /> Save State
-              </button>
-              <button className="overflow-menu-item" onClick={handleLoadState}>
-                <FolderOpen size={13} /> Load State
-              </button>
-              <button className="overflow-menu-item"
-                onClick={() => mapImportApiRef.current?.openFileDialog?.()}>
-                <Upload size={13} /> Import KML / KMZ / Image…
-              </button>
-
-              <div style={{ height: 1, background: '#21262d', margin: '4px 0' }} />
-
-              <button className="overflow-menu-item" onClick={handlePurgeCache}>
-                <Trash2 size={13} /> Purge Cache
-              </button>
-              <button className="overflow-menu-item" onClick={() => setHelpOpen(true)}>
-                <HelpCircle size={13} /> Help
-              </button>
-            </div>
-          )}
+          <OverflowMenu
+            open={menuOpen}
+            onClose={() => setMenuOpen(false)}
+            mainMode={mainMode}
+            canUndo={undoStackRef.current.length > 0}
+            canRedo={redoStackRef.current.length > 0}
+            undoTick={undoTick}
+            onUndo={undo}
+            onRedo={redo}
+            drawMode={drawMode}
+            onToggleBoundsDraw={() => setDrawMode(m => m === 'bounds' ? null : 'bounds')}
+            isSimulating={isSimulating}
+            onInterference={runInterference}
+            onSuperLayer={runSuperLayer}
+            satToolActive={satToolActive}
+            onToggleSatTool={() => setSatToolActive(s => !s)}
+            onOpenArchive={() => setArchiveOpen(true)}
+            onSaveState={handleSaveState}
+            onLoadState={handleLoadState}
+            onImport={() => mapImportApiRef.current?.openFileDialog?.()}
+            onPurgeCache={handlePurgeCache}
+            onOpenHelp={() => setHelpOpen(true)}
+          />
         </div>
 
         <div className="app-logo" style={{ flexShrink: 0 }}>
