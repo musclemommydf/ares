@@ -26,6 +26,7 @@ from app.api.geo_routes import router as geo_router
 from app.api.sdr_routes import router as sdr_router
 from app.api.df_routes import router as df_router
 from app.api.chat_routes import router as chat_router
+from app.api.uas_routes import router as uas_router
 from app.core.auth import ensure_default_user
 from app.core.simulation import periodic_cache_cleanup, purge_all_stale_caches
 from app.core.sdr import sdr_manager
@@ -168,6 +169,7 @@ app.include_router(geo_router, prefix="/api/v1")
 app.include_router(sdr_router, prefix="/api/v1")
 app.include_router(df_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
+app.include_router(uas_router, prefix="/api/v1")
 
 
 @app.get("/")

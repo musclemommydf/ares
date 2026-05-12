@@ -12,7 +12,7 @@ set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 
 echo.
 echo  ╔══════════════════════════════════════════════════╗
-echo  ║              Ares  Installer v5.0 (authoritative)                ║
+echo  ║              Ares  Installer v5.1 (authoritative)                ║
 echo  ╚══════════════════════════════════════════════════╝
 echo.
 

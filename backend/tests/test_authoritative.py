@@ -299,8 +299,57 @@ def test_security():
           f"flat={flat.propagation_mode}, ridge={ridge.propagation_mode}")
 
 
+
+# ── UAS video downlink scanner / decoder ─────────────────────────────────────
+def test_uas_video():
+    print("UAS video — feed registry, MISB ST 0601 KLV, footprint, classifier:")
+    from app.core.sdr import uas_video as u
+    check("feed registry has the analog + digital families",
+          len(u.FEED_TYPES) >= 12
+          and any(f["id"] == "fm_analog_video_ntsc" for f in u.FEED_TYPES)
+          and any(f["id"] == "dvbt" and f["decodable"] and f["carries_klv"] for f in u.FEED_TYPES)
+          and any(f["id"] == "dvbs2" and f["decodable"] for f in u.FEED_TYPES)
+          and any(f["id"] == "dji_ocusync" and not f["decodable"] for f in u.FEED_TYPES))
+    check("known channel plans include the 5.8 GHz raceband",
+          len(u.KNOWN_CHANNELS) >= 6 and any("Raceband" in b["name"] for b in u.KNOWN_CHANNELS))
+    # MISB ST 0601 encode → parse round-trip (real bytes, real checksum)
+    flds = {"uas_ls_version": 19, "platform_call_sign": "TESTUAS", "sensor_lat_deg": 51.5072, "sensor_lon_deg": -0.1276,
+            "sensor_true_alt_m": 1500.0, "frame_center_lat_deg": 51.510, "frame_center_lon_deg": -0.120,
+            "slant_range_m": 3200.0, "platform_heading_deg": 88.0, "sensor_hfov_deg": 20.0}
+    pkt = u.encode_misb_0601(flds)
+    klv = u.parse_misb_0601(pkt)
+    check("MISB 0601 packet starts with the UAS Datalink LS UL", pkt[:16] == u.UAS_LS_KEY)
+    check("MISB 0601 round-trip: version + call sign + sensor lat/lon",
+          klv.get("uas_ls_version") == 19 and klv.get("platform_call_sign") == "TESTUAS"
+          and abs(klv.get("sensor_lat_deg", 0.0) - 51.5072) < 1e-4
+          and abs(klv.get("sensor_lon_deg", 0.0) + 0.1276) < 1e-4)
+    check("MISB 0601 round-trip: alt within u16 resolution, slant range close",
+          abs(klv.get("sensor_true_alt_m", 0.0) - 1500.0) < 0.5 and abs(klv.get("slant_range_m", 0.0) - 3200.0) < 100.0)
+    check("MISB 0601 parses payload-only (no UL) too", u.parse_misb_0601(pkt[17:]).get("platform_call_sign") == "TESTUAS")
+    # decode session → metadata → footprint + geojson
+    s_ = u.start_decode(None, 1.5e9, "dvbt", label="HARNESS")
+    check("decode session created with a sane status",
+          isinstance(s_.get("id"), str) and s_.get("status") in ("started", "tool_missing", "capture_missing"))
+    md = u.session_metadata(s_["id"])
+    check("session metadata yields KLV with a platform position",
+          bool(md) and isinstance(md.get("klv"), dict) and md["klv"].get("sensor_lat_deg") is not None)
+    check("footprint is a closed ring of >= 4 points",
+          bool(md) and md.get("footprint") and len(md["footprint"]) >= 4 and md["footprint"][0] == md["footprint"][-1])
+    glx = {f["properties"].get("uas_glx") for f in u.klv_to_geojson(md["klv"]).get("features", [])}
+    check("klv_to_geojson emits platform + frame_center + footprint", {"platform", "frame_center", "footprint"} <= glx)
+    check("a proprietary feed (OcuSync) is characterize-only, not decoded",
+          u.start_decode(None, 2.412e9, "dji_ocusync").get("status") == "characterize_only")
+    check("an unknown feed type is rejected", "error" in u.start_decode(None, 1e9, "no_such_feed"))
+    # PSD classifier over a synthetic band
+    res = u.classify_band(None, 2.36e9, 2.50e9, use_iq=False)
+    check("classify_band returns >= 1 detection, each with a feed_type + confidence",
+          isinstance(res.get("detections"), list) and res.get("n_detections", 0) >= 1
+          and all("feed_type" in d and "confidence" in d and "bandwidth_hz" in d for d in res["detections"]))
+    st = u.status()
+    check("module status is coherent", st.get("feed_types") == len(u.FEED_TYPES) and "capture_backend" in st and "decoders" in st)
+
 if __name__ == "__main__":
-    for fn in (test_itm, test_df, test_tdoa, test_sgp4, test_hf, test_interferometry, test_security):
+    for fn in (test_itm, test_df, test_tdoa, test_sgp4, test_hf, test_interferometry, test_security, test_uas_video):
         try:
             fn()
         except Exception as e:

@@ -51,7 +51,7 @@ done
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║              Ares  Installer v5.0 (authoritative)                ║${NC}"
+echo -e "${BOLD}║              Ares  Installer v5.1 (authoritative)                ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 

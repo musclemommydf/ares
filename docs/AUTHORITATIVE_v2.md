@@ -213,6 +213,40 @@ tab); the DF compass shows the latest LoB in **all three reps** (`abs … · rel
 
 ---
 
+## 14. UAS video downlink scanner / decoder  ✅ new (decode chains via external tools / hardware)
+
+`app/core/sdr/uas_video.py` + `app/api/uas_routes.py` add a drone-video pipeline for
+SignalHound (BB60/SM200/SM435), Epiq Sidekiq/Matchstiq and Ettus/NI USRP SDRs (via
+SoapySDR's per-vendor modules, the vendor SDK when importable, else a synthetic
+provider so the UI works offline). What runs **here, with no external tooling**:
+
+* a registry of analog + digital UAS video feed types — FM-analog NTSC/PAL/SECAM,
+  legacy VSB/AM, DVB-T, DVB-T2, DVB-S, DVB-S2/S2X, ISDB-T 1-seg, generic COFDM and
+  single-carrier-QAM MPEG-TS modems, plus the proprietary/encrypted ones (DJI OcuSync /
+  Lightbridge, HDZero, Walksnail, CDL/BE-CDL) flagged **characterize-only**;
+* known UAS/FPV video channel plans (900 MHz, 1.2/1.3 GHz, 2.4 GHz, L/S/C/Ku-band ISR,
+  the 5.8 GHz raceband, …);
+* a PSD-based feed **classifier** — occupied-band detection + bandwidth / flatness /
+  channel-plan heuristics; when an IQ provider is wired it adds IQ-domain confirmations
+  (an OFDM cyclic-prefix autocorrelation peak, an FM-video line-rate spectral line);
+* a full **MISB ST 0601** (STANAG 4609 *UAS Datalink Local Set*) KLV **parser and
+  encoder**, with the 16-bit checksum and the standard IMAP range mappings — so a decoded
+  feed's metadata becomes a platform position, a sensor line-of-sight, and a ground-
+  **footprint polygon** (explicit corner points, or corner offsets about the frame centre,
+  or a coarse FOV/slant-range projection), exported as a GeoJSON FeatureCollection
+  (`uas_glx` ∈ {platform, frame_center, los, footprint}) and pushed to ATAK as CoT.
+
+**Indicative / needs external tools or hardware:** the actual video demod / TS
+extraction is handed off — at runtime, via `$PATH` detection, exactly like the
+audio-decode bridge — to `leandvb` (DVB-S/S2), a DVB-T/T2 receiver (`gr-dvbt` /
+`dvbt2-blade` / SDRangel headless DATV), `ffmpeg` / `tsp` (TSDuck) for the
+MPEG-TS → H.264/H.265 step, and a software analog-TV decoder for FM/VSB composite;
+real IQ capture needs SoapySDR built with the SignalHound / Sidekiq / UHD module (or a
+wired `IQ_PROVIDER`). When those aren't present the decode session reports exactly which
+package would handle the feed, and metadata/footprints are driven by a synthetic MISB
+0601 generator so the rest of the chain (map overlay, CoT) is exercised offline.
+14 checks for it in the validation harness (`test_uas_video`).
+
 ## What's still indicative (and why)
 
 * **Real-time RF / coherent IQ / vocoder audio** — the SoapySDR PSD shim, the JSON-lines IQ ingest →
