@@ -24,6 +24,7 @@ import { useViewMode } from './hooks/useViewMode'
 import AtakServerPanel from './components/Tools/AtakServerPanel'
 import AppModals from './components/AppModals'
 import OverflowMenu from './components/Header/OverflowMenu'
+import HeaderTabs from './components/Header/HeaderTabs'
 import SdrPanel from './components/Tools/SdrPanel'
 import { useUserLayers } from './hooks/useUserLayers'
 import { useStandaloneTerrainProfile } from './hooks/useStandaloneTerrainProfile'
@@ -1172,91 +1173,14 @@ export default function App() {
           />
         </div>
 
-        <div className="app-logo" style={{ flexShrink: 0 }}>
-          <AppIcon size={24} />
-          Ares
-        </div>
-
-        <div style={{ width: 1, height: 20, background: '#30363d', margin: '0 4px', flexShrink: 0 }} />
-
-        {/* Mode tabs */}
-        <div style={{ display: 'flex', gap: 2, alignItems: 'center', flexShrink: 0 }}>
-          <button
-            className={`tab ${mainMode === 'propagation' ? 'active' : ''}`}
-            style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}
-            onClick={() => { setMainMode('propagation'); setLobPickingMode(false) }}
-          >
-            <Radio size={11} style={{ marginRight: 4, display: 'inline', verticalAlign: 'text-bottom' }} />
-            Propagation
-          </button>
-          <button
-            className={`tab ${mainMode === 'geolocation' ? 'active' : ''}`}
-            style={{ padding: '4px 10px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
-                     color: mainMode === 'geolocation' ? '#a78bfa' : undefined }}
-            onClick={() => { setMainMode('geolocation'); setDrawMode(null) }}
-          >
-            <Crosshair size={11} style={{ marginRight: 4, display: 'inline', verticalAlign: 'text-bottom' }} />
-            Geolocation
-          </button>
-        </div>
-
-        <div style={{ width: 1, height: 20, background: '#30363d', margin: '0 4px', flexShrink: 0 }} />
-
-        {/* Primary analysis tabs — propagation only */}
-        {mainMode === 'propagation' && (
-          <div style={{ display: 'flex', gap: 2, alignItems: 'center', flexShrink: 0, minWidth: 0 }}>
-            <div className="tabs" style={{ borderBottom: 'none', padding: 0, flexWrap: 'nowrap' }}>
-              {[
-                { id: 'coverage',  label: 'Coverage' },
-                { id: 'p2p',       label: 'P2P' },
-                { id: 'best_site', label: 'Best Site' },
-                { id: 'radar',     label: 'Radar' },
-              ].map(t => (
-                <button
-                  key={t.id}
-                  className={`tab ${activeTab === t.id ? 'active' : ''}`}
-                  style={{ whiteSpace: 'nowrap', fontSize: 11 }}
-                  onClick={() => {
-                    setActiveTab(t.id)
-                    setDrawMode(null)
-                    if (t.id === 'radar') setPropagation(p => ({ ...p, model: 'radar' }))
-                  }}
-                >{t.label}</button>
-              ))}
-            </div>
-
-            {/* Tool tabs — icon only to save space */}
-            <div style={{ width: 1, height: 20, background: '#30363d', margin: '0 2px', flexShrink: 0 }} />
-            <div className="tabs" style={{ borderBottom: 'none', padding: 0, flexWrap: 'nowrap' }}>
-              {[
-                { id: 'route',            label: 'Route',       Icon: Route },
-                { id: 'multipoint',       label: 'Multipoint',  Icon: MapPin },
-                { id: 'manet',            label: 'MANET',       Icon: Network },
-                { id: 'best_server',      label: 'Best Server', Icon: Radio },
-                { id: 'best_site_polygon',label: 'BSA Polygon', Icon: Hexagon },
-                { id: 'ray_trace',        label: '3D Ray',      Icon: Scan },
-              ].map(t => (
-                <button
-                  key={t.id}
-                  className={`tab ${activeTab === t.id ? 'active' : ''}`}
-                  title={t.label}
-                  style={{ padding: '4px 7px' }}
-                  onClick={() => { setActiveTab(t.id); setDrawMode(null) }}
-                >
-                  <t.Icon size={13} />
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Geolocation mode label */}
-        {mainMode === 'geolocation' && (
-          <span style={{ fontSize: 11, color: '#a78bfa', fontWeight: 600, flexShrink: 0 }}>
-            {lobs.length} LoB{lobs.length !== 1 ? 's' : ''}
-            {lobs.length > 0 && ` · ${lobGroups.filter(g => g.lobs.length >= 2).length} group${lobGroups.filter(g => g.lobs.length >= 2).length !== 1 ? 's' : ''}`}
-          </span>
-        )}
+        <HeaderTabs
+          mainMode={mainMode}
+          activeTab={activeTab}
+          lobCount={lobs.length}
+          lobGroupCount={lobGroups.filter(g => g.lobs.length >= 2).length}
+          onSelectMode={(m) => { setMainMode(m); if (m === 'propagation') setLobPickingMode(false); else setDrawMode(null) }}
+          onSelectTab={(id) => { setActiveTab(id); setDrawMode(null); if (id === 'radar') setPropagation(prev => ({ ...prev, model: 'radar' })) }}
+        />
 
         <div className="header-spacer" />
 
