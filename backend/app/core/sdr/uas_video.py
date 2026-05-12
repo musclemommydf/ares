@@ -546,16 +546,14 @@ def _iq_features(device: dict, center_hz: float, bw_hz: float) -> Optional[dict]
     # OFDM: cyclic-prefix autocorrelation — sweep CP lags, look for a sharp peak
     n = min(x.size, 1 << 16)
     seg = x[:n]
+    pwr = float(np.mean(np.abs(seg) ** 2)) + 1e-12
     ac_peak = 0.0
-    for cp_frac in (1 / 4, 1 / 8, 1 / 16, 1 / 32):
-        for fft_len in (1024, 2048, 4096, 8192):
-            lag = int(fft_len * (1 + cp_frac))
-            if lag * 2 >= n:
-                continue
-            a = seg[:n - lag]; b = seg[lag:n]
-            r = np.abs(np.vdot(a, b)) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12)
-            ac_peak = max(ac_peak, float(r))
-    feat["ofdm"] = ac_peak > 0.35
+    for fft_len in (512, 1024, 2048, 4096, 8192, 16384):
+        if fft_len * 2 >= n:
+            continue
+        a = seg[:n - fft_len]; b = seg[fft_len:n]
+        ac_peak = max(ac_peak, float(abs(np.mean(a * np.conj(b))) / pwr))
+    feat["ofdm"] = ac_peak > 0.06
     feat["ofdm_cp_corr"] = round(ac_peak, 3)
     # FM video: demod, FFT the magnitude, look for a line at ~15.625-15.734 kHz
     inst = np.angle(seg[1:] * np.conj(seg[:-1]))
