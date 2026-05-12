@@ -662,21 +662,32 @@ export default function GlobeView({
     // 📥 globe button) — render them here too so they persist across 2D⇄3D.
     for (const layer of (ul?.layers || [])) {
       if (!layer || layer.visible === false || layer.kind !== 'geojson' || !layer.geojson) continue
-      const lc = Cesium.Color.fromCssColorString(layer.color || '#22d3ee')
-      const fillc = lc.withAlpha(Math.max(0.08, (layer.opacity ?? 0.7) * 0.25))
+      const layerC = Cesium.Color.fromCssColorString(layer.color || '#22d3ee')
+      const layerFill = layerC.withAlpha(Math.max(0.08, (layer.opacity ?? 0.7) * 0.25))
       const toDegArr = (ring) => Cesium.Cartesian3.fromDegreesArray(ring.flat())
       for (const f of (layer.geojson.features || [])) {
         const g = f?.geometry; if (!g) continue
         const p = f.properties || {}
+        // honour per-feature colour (UAS / Remote-ID features carry their own); label uas_glx/rid_glx points
+        const ug = p.uas_glx || p.rid_glx
+        const lc = (ug || p.color) ? Cesium.Color.fromCssColorString(p.color || layer.color || '#22d3ee') : layerC
+        const fillc = (ug || p.color) ? lc.withAlpha(0.16) : layerFill
+        const ptSize = (ug === 'drone' || ug === 'platform') ? 10 : (ug ? 7 : 7)
+        const ugLabel = ug
+          ? { text: String(p.serial || p.call_sign || (ug.charAt(0).toUpperCase() + ug.slice(1))),
+              font: '11px sans-serif', fillColor: Cesium.Color.WHITE, showBackground: true,
+              backgroundColor: Cesium.Color.fromCssColorString('#161b22').withAlpha(0.85),
+              pixelOffset: new Cesium.Cartesian2(0, -14), heightReference: Cesium.HeightReference.CLAMP_TO_GROUND }
+          : undefined
         try {
           if (g.type === 'Point') {
             const [lo, la, h] = g.coordinates
             ds.entities.add({ position: Cesium.Cartesian3.fromDegrees(lo, la, typeof h === 'number' ? h : 0),
-              point: { pixelSize: 7, color: lc, outlineColor: Cesium.Color.BLACK, outlineWidth: 1,
+              point: { pixelSize: ptSize, color: lc, outlineColor: Cesium.Color.BLACK, outlineWidth: 1,
                        heightReference: typeof h === 'number' ? Cesium.HeightReference.NONE : Cesium.HeightReference.CLAMP_TO_GROUND },
-              label: p.name ? { text: String(p.name), font: '11px sans-serif', fillColor: Cesium.Color.WHITE,
+              label: ugLabel || (p.name ? { text: String(p.name), font: '11px sans-serif', fillColor: Cesium.Color.WHITE,
                 pixelOffset: new Cesium.Cartesian2(0, -14), style: Cesium.LabelStyle.FILL_AND_OUTLINE, outlineWidth: 2,
-                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND } : undefined })
+                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND } : undefined) })
           } else if (g.type === 'LineString') {
             ds.entities.add({ polyline: { positions: g.coordinates.map(([lo, la]) => Cesium.Cartesian3.fromDegrees(lo, la)),
               width: 2.5, material: lc, clampToGround: true } })

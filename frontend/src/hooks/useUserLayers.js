@@ -48,16 +48,16 @@ function vectorStyle(color = '#06d6a0', opacity = 0.85) {
 // a Leaflet path style. Falls back to the layer's default colour.
 function featurePathStyle(feature, defaultColor, defaultOpacity) {
   const p = feature?.properties || {}
-  const stroke = p.stroke || p['stroke-color'] || defaultColor
-  const strokeOpacity = p['stroke-opacity'] != null ? Number(p['stroke-opacity']) : defaultOpacity
+  const ug = p.uas_glx || p.rid_glx                       // UAS / Remote-ID feature tag, if any
+  const isLine = feature?.geometry?.type === 'LineString' || feature?.geometry?.type === 'MultiLineString'
+  const stroke = p.stroke || p['stroke-color'] || p.color || defaultColor
+  const strokeOpacity = p['stroke-opacity'] != null ? Number(p['stroke-opacity']) : (ug ? 0.95 : defaultOpacity)
   const strokeWidth = p['stroke-width'] != null ? Math.max(1, Number(p['stroke-width'])) : 2
-  const fill = p.fill || p['fill-color'] || stroke
-  const fillOpacity = p['fill-opacity'] != null
-    ? Number(p['fill-opacity'])
-    : (feature?.geometry?.type === 'LineString' || feature?.geometry?.type === 'MultiLineString')
-      ? 0
-      : defaultOpacity * 0.3
-  return { color: stroke, opacity: strokeOpacity, weight: strokeWidth, fillColor: fill, fillOpacity }
+  const fill = p.fill || p['fill-color'] || (p.color || stroke)
+  const fillOpacity = p['fill-opacity'] != null ? Number(p['fill-opacity']) : (isLine ? 0 : (ug ? 0.14 : defaultOpacity * 0.3))
+  const st = { color: stroke, opacity: strokeOpacity, weight: strokeWidth, fillColor: fill, fillOpacity }
+  if (ug === 'los' || ug === 'platform_track') st.dashArray = '6 4'
+  return st
 }
 
 function pickPlacemarkLabelColor(feature, fallback) {
@@ -182,6 +182,18 @@ export function useUserLayers() {
       },
       pointToLayer: (f, latlng) => {
         const p = f.properties || {}
+        // 0. UAS / Remote-ID feature → a distinct, colour-coded marker (drone / operator / home / frame-centre).
+        const ug = p.uas_glx || p.rid_glx
+        if (ug) {
+          const c = p.color || ({ drone: '#ef4444', platform: '#22d3ee', operator: '#a855f7', home: '#f59e0b', frame_center: '#f59e0b' }[ug] || color)
+          const glyph = (ug === 'drone' || ug === 'platform') ? '\u25BE' : ug === 'operator' ? '\u25C9' : ug === 'home' ? '\u2302' : ug === 'frame_center' ? '\u2295' : '\u25CF'
+          const sz = (ug === 'drone' || ug === 'platform') ? 18 : 16
+          return L.marker(latlng, {
+            title: String(p.serial || p.call_sign || ug),
+            icon: L.divIcon({ className: '', iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2],
+              html: `<div style="width:${sz}px;height:${sz}px;border-radius:50%;background:${c};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;font-size:${Math.round(sz * 0.6)}px;color:#fff;font-weight:700;">${glyph}</div>` }),
+          })
+        }
         const labelColor = pickPlacemarkLabelColor(f, color)
         // 1. ATAK CoT type → MIL-STD-2525 SIDC rendered via milsymbol.
         //    Highest-fidelity option for ATAK exports because the CoT type
@@ -208,6 +220,24 @@ export function useUserLayers() {
       },
       onEachFeature: (feature, lyr) => {
         const p = feature.properties || {}
+        const ug = p.uas_glx || p.rid_glx
+        if (ug) {
+          const tip = String(p.serial || p.call_sign || ({ drone: 'UAS', platform: 'UAS', operator: 'operator', home: 'home', frame_center: 'frame centre', footprint: 'footprint', area: 'op. area', los: 'sensor LOS', platform_track: 'track' }[ug] || ug))
+          if (showLabels) lyr.bindTooltip(escapeHtml(tip), { permanent: true, direction: feature.geometry?.type === 'Point' ? 'right' : 'center', className: 'mv-feature-label', offset: feature.geometry?.type === 'Point' ? [10, 0] : [0, 0], sticky: feature.geometry?.type !== 'Point' })
+          const rows = [
+            p.serial && `Serial: ${escapeHtml(String(p.serial))}`,
+            (p.alt_m != null) && `Alt: ${Math.round(p.alt_m)} m`,
+            (p.heading_deg != null) && `Heading: ${Math.round(p.heading_deg)}\u00B0`,
+            (p.speed_m_s != null) && `Speed: ${p.speed_m_s} m/s`,
+            (p.slant_range_m != null) && `Slant range: ${Math.round(p.slant_range_m)} m`,
+            (p.elev_m != null) && `Elev: ${Math.round(p.elev_m)} m`,
+            (p.operator_id) && `Operator ID: ${escapeHtml(String(p.operator_id))}`,
+            (p.radius_m != null) && `Area radius: ${p.radius_m} m`,
+            (p.status) && `Status: ${escapeHtml(String(p.status))}`,
+          ].filter(Boolean)
+          if (rows.length) lyr.bindPopup(`<div style="font-size:12px;line-height:1.45"><strong style="color:#e6edf3">${escapeHtml(tip)}</strong><br>${rows.join('<br>')}</div>`)
+          return
+        }
         const name = p.name || p.Name || p.NAME || ''
         const desc = p.description || p.desc || p.Description || ''
 
