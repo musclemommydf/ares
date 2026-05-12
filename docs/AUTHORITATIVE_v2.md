@@ -268,6 +268,8 @@ detected feeds → decode/characterise → live MISB readout (platform/footprint
 platform", "add platform+footprint to map" and "exploit (PED)" buttons. 12 more checks in
 the harness (`test_video_exploit`). Total backend routes: 104; harness: 79/79.
 
+**On decrypting OcuSync / Lightbridge / CDL video — Ares does not, and there is no public way to.** Those carry AES- (or COMSEC-) encrypted video under keys negotiated at pairing; a passive intercept cannot recover them. The registry flags them *characterize-only* (detect, fingerprint, DF, geolocate). The open, legitimate way to detect, ID and geolocate a UAS **and its operator** is the drone's unencrypted telemetry beacon — the `remote_id` (ASTM F3411 / FAA Remote ID, WiFi NAN/beacon + BT4/5) and `dji_droneid` feed-registry entries (`decodable: True`, with `decoder_chain` pointing at the published open tooling: `dji_droneid` / a Remote-ID decoder); a full Remote-ID/DroneID demux is the recommended next module. HDZero is reasonably open and DVB-* is unencrypted, so those are decode (not decrypt) targets and already handled.
+
 ## What's still indicative (and why)
 
 * **Real-time RF / coherent IQ / vocoder audio** — the SoapySDR PSD shim, the JSON-lines IQ ingest →

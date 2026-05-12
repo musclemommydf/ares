@@ -151,7 +151,7 @@ FEED_TYPES: list[dict] = [
     # ── digital, proprietary / encrypted → detect & characterize (and DF), no decode ──
     _f("dji_ocusync", "DJI OcuSync / O2 / O3 / O4 / Air-Sync", transport="proprietary", modulation="adaptive OFDM, AES-encrypted video",
        bw_hz=[10e6, 20e6, 40e6], carries_klv=False, decodable=False, chain=[],
-       notes="Consumer DJI link (2.4/5.2/5.8 GHz, also 900 MHz on some models). Encrypted — detect/characterize/geolocate only."),
+       notes="Consumer DJI link (2.4/5.2/5.8 GHz, also 900 MHz on some models). The video is AES-encrypted with pairing-negotiated keys — there is no public passive decrypt; Ares detects/characterises/geolocates it. To ID and locate the drone + its operator, use its unencrypted DroneID / Remote ID beacon (see the dji_droneid / remote_id feed types)."),
     _f("dji_lightbridge", "DJI Lightbridge / Lightbridge 2", transport="proprietary", modulation="OFDM, encrypted video",
        bw_hz=[10e6, 20e6], carries_klv=False, decodable=False, chain=[], notes="Earlier DJI link family. Characterize-only."),
     _f("hdzero", "HDZero digital FPV", transport="proprietary", modulation="custom low-latency digital (5.8 GHz)",
@@ -160,7 +160,20 @@ FEED_TYPES: list[dict] = [
        bw_hz=[20e6, 40e6], carries_klv=False, decodable=False, chain=[], notes="Proprietary; characterize-only."),
     _f("cdl_becdl", "CDL / TCDL / Bandwidth-Efficient CDL", transport="proprietary", modulation="proprietary, encrypted (COMSEC)",
        bw_hz=[10.71e6, 21.42e6, 45e6, 137e6, 274e6], carries_klv=True, decodable=False, chain=[],
-       notes="Military common data link (Ku/Ka/X/C). Encrypted — detect/characterize only."),
+       notes="Military common data link (Ku/Ka/X/C). COMSEC-encrypted — no public decrypt; detect/characterise only."),
+    # ── telemetry beacons (NOT the video link, but the open way to detect & locate the drone + its operator) ──
+    _f("remote_id", "Remote ID / ASTM F3411 (FAA Remote ID — WiFi NAN/beacon + BT4/5)", transport="telemetry_beacon",
+       modulation="WiFi Neighbor-Awareness-Networking / beacon vendor IE, or Bluetooth LE advertising", bw_hz=[20e6, 1e6, 2e6],
+       carries_klv=False, decodable=True, chain=["rid-decoder", "wireshark", "tcpdump"],
+       notes="The mandated unencrypted broadcast on 2.4/5.x GHz WiFi (often ch 6 / ch 149) and BT — drone serial, "
+             "position/altitude/speed, AND the operator/home-point location. This is the open, legitimate way to "
+             "detect, ID and geolocate a UAS and its pilot; the video link is a separate (often encrypted) channel."),
+    _f("dji_droneid", "DJI DroneID (pre-Remote-ID telemetry beacon)", transport="telemetry_beacon",
+       modulation="OFDM burst on a WiFi channel (DJI vendor protocol)", bw_hz=[10e6, 20e6],
+       carries_klv=False, decodable=True, chain=["dji_droneid", "rid-decoder"],
+       notes="DJI's own telemetry beacon (the pre-Remote-ID format, also still emitted by many models): serial, "
+             "GPS, and the operator location — recoverable with the published open tooling. NOTE: this is the "
+             "telemetry/Remote-ID broadcast, not the AES-encrypted OcuSync video, which has no public decrypt."),
     _f("unknown_digital", "Unidentified digital video link", transport="unknown", modulation="(unknown digital)",
        bw_hz=[], carries_klv=False, decodable=False, chain=["sdrangel"], notes="Occupied digital channel that didn't match a known signature — record + DF it."),
     _f("unknown_analog", "Unidentified analog video link", transport="unknown", modulation="(unknown analog)",
@@ -445,7 +458,7 @@ def klv_to_geojson(klv: dict) -> dict:
 # ════════════════════════════════════════════════════════════════════════════
 # Feed classifier (PSD-based; IQ confirmations when an IQ provider is wired)
 # ════════════════════════════════════════════════════════════════════════════
-def _occupied_bands(power_dbm: list[float], center_hz: float, span_hz: float, *, offset_db: float = 8.0):
+def _occupied_bands(power_dbm: list[float], center_hz: float, span_hz: float, *, offset_db: float = 11.0, min_run: int = 4):
     p = np.asarray(power_dbm, float)
     if p.size < 8:
         return []
@@ -461,7 +474,7 @@ def _occupied_bands(power_dbm: list[float], center_hz: float, span_hz: float, *,
             j = i
             while j + 1 < bins and mask[j + 1]:
                 j += 1
-            if j - i >= 2:
+            if j - i >= min_run:
                 seg = p[i:j + 1]
                 runs.append((f0 + i * df, f0 + j * df, float(seg.max()), float(seg.mean()), float(seg.std()), seg))
             i = j + 1
@@ -765,4 +778,6 @@ def status() -> dict:
         "capture_backend": _capture_backend(),
         "active_sessions": len(_SESSIONS),
         "misb_0601": "parse+encode (ST 0601, STANAG 4609 UAS Datalink LS), with checksum",
+        "encrypted_video": "OcuSync / Lightbridge / CDL — detect & geolocate only; no public passive decrypt. "
+                           "Use the Remote ID / DroneID telemetry beacon (decodable) to ID & locate the drone + operator.",
     }
