@@ -58,6 +58,7 @@ import EditableLabel from './components/Common/EditableLabel'
 import ExtraTransmitters from './components/Controls/ExtraTransmitters'
 import RadarTargetPicker from './components/Controls/RadarTargetPicker'
 import BestSiteSidebar from './components/Controls/BestSiteSidebar'
+import RouteSidebar from './components/Controls/RouteSidebar'
 import ToolBtn from './components/Common/ToolBtn'
 
 import {
@@ -1337,53 +1338,14 @@ export default function App() {
 
         {/* Route analysis */}
         {activeTab === 'route' && (
-          <div style={{ borderTop: '1px solid #21262d', padding: '8px 12px' }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 6 }}>ROUTE ANALYSIS</div>
-            <div style={{ fontSize: 11, color: '#444d56', marginBottom: 8 }}>
-              Draw a polyline on the map. Each waypoint is tested against a fixed receiver.
-            </div>
-            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-              <button
-                className={`btn ${drawMode === 'route' ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ flex: 1, fontSize: 11, gap: 4 }}
-                onClick={() => setDrawMode(m => m === 'route' ? null : 'route')}
-              >
-                <Route size={11} />
-                {drawMode === 'route' ? 'Drawing… (right-click to finish)' : 'Draw Route'}
-              </button>
-              {routeWaypoints.length > 0 && (
-                <button
-                  className="btn btn-ghost"
-                  style={{ fontSize: 11, color: '#ef4444' }}
-                  onClick={() => { setRouteWaypoints([]); setDrawMode(null) }}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            {routeWaypoints.length > 0 && (
-              <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 6 }}>
-                {routeWaypoints.length} waypoints drawn
-              </div>
-            )}
-            <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 4 }}>
-              Fixed receiver (P2P target):
-            </div>
-            {routeReceiverPoint ? (
-              <div style={{ fontSize: 11, color: '#06d6a0', marginBottom: 6 }}>
-                {routeReceiverPoint.lat.toFixed(4)}, {routeReceiverPoint.lon.toFixed(4)}
-                <button
-                  className="btn btn-ghost"
-                  style={{ marginLeft: 8, fontSize: 10, padding: '1px 4px', color: '#ef4444' }}
-                  onClick={() => setRouteReceiverPoint(null)}
-                >×</button>
-              </div>
-            ) : (
-              <div style={{ fontSize: 11, color: '#444d56', marginBottom: 6 }}>
-                Click map in P2P mode to set receiver, or defaults to TX position.
-              </div>
-            )}
-          </div>
+          <RouteSidebar
+            drawMode={drawMode}
+            waypoints={routeWaypoints}
+            receiverPoint={routeReceiverPoint}
+            onToggleDraw={() => setDrawMode(m => m === 'route' ? null : 'route')}
+            onClearWaypoints={() => { setRouteWaypoints([]); setDrawMode(null) }}
+            onClearReceiver={() => setRouteReceiverPoint(null)}
+          />
         )}
 
         {/* Multipoint */}
