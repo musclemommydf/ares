@@ -20,6 +20,7 @@ import MapView from './components/Map/MapView'
 import LayerManagerPanel from './components/Map/LayerManagerPanel'
 import { useViewMode } from './hooks/useViewMode'
 import AtakServerPanel from './components/Tools/AtakServerPanel'
+import AppModals from './components/AppModals'
 import SdrPanel from './components/Tools/SdrPanel'
 import { useUserLayers } from './hooks/useUserLayers'
 import { useStandaloneTerrainProfile } from './hooks/useStandaloneTerrainProfile'
@@ -1414,37 +1415,16 @@ export default function App() {
       </header>
 
       {/* ── Modals ──────────────────────────────────────────────────────── */}
-      {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
-      {atakPanelOpen && (
-        <AtakServerPanel
-          onClose={() => setAtakPanelOpen(false)}
-          mapCenter={{ lat: tx.lat, lon: tx.lon }}
-          incomingBbox={packBboxFromMap}
-          onRequestDrawBbox={() => {
-            setAtakPanelOpen(false)
-            awaitingPackBboxRef.current = true
-            setDrawMode('bounds')
-            toast.info('Draw a rectangle on the map to pick the pack area')
-          }}
-        />
-      )}
-      {sdrPanelOpen && (
-        <SdrPanel
-          onClose={() => setSdrPanelOpen(false)}
-          mapCenter={{ lat: tx.lat, lon: tx.lon }}
-          onSdrFeatures={setSdrFeatures}
-          onSdrCoverage={setSdrCoverage}
-        />
-      )}
-
-      {archiveOpen && (
-        <ArchivePanel
-          currentGeojson={currentGeojsonForArchive}
-          currentParams={currentParamsForArchive}
-          onLoad={handleArchiveLoad}
-          onClose={() => setArchiveOpen(false)}
-        />
-      )}
+      <AppModals
+        helpOpen={helpOpen} onCloseHelp={() => setHelpOpen(false)}
+        atakPanelOpen={atakPanelOpen} onCloseAtak={() => setAtakPanelOpen(false)}
+        mapCenter={{ lat: tx.lat, lon: tx.lon }}
+        packBboxFromMap={packBboxFromMap} awaitingPackBboxRef={awaitingPackBboxRef} setDrawMode={setDrawMode}
+        sdrPanelOpen={sdrPanelOpen} onCloseSdr={() => setSdrPanelOpen(false)}
+        onSdrFeatures={setSdrFeatures} onSdrCoverage={setSdrCoverage}
+        archiveOpen={archiveOpen} onCloseArchive={() => setArchiveOpen(false)}
+        currentGeojson={currentGeojsonForArchive} currentParams={currentParamsForArchive} onArchiveLoad={handleArchiveLoad}
+      />
 
 
       {/* ── Sidebar ────────────────────────────────────────────────────── */}
