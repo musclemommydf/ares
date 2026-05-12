@@ -42,6 +42,7 @@ import EmitterSummary from './components/Panels/EmitterSummary'
 import SavedLocations from './components/Panels/SavedLocations'
 import SpaceWxPanel from './components/Panels/SpaceWxPanel'
 import BottomPanelTabs from './components/Panels/BottomPanelTabs'
+import TerrainTab from './components/Panels/TerrainTab'
 import UasVideoPanel from './components/Tools/UasVideoPanel'
 import HelpPanel from './components/Common/HelpPanel'
 import DecibelCalculator from './components/Tools/DecibelCalculator'
@@ -251,7 +252,7 @@ export default function App() {
   const ul = useUserLayers()
   const {
     terrainLineMode, setTerrainLineMode,
-    standaloneProfile, standaloneProfileLoading, standaloneProfileError,
+    standaloneProfile, setStandaloneProfile, standaloneProfileLoading, standaloneProfileError,
     handleTerrainLineComplete,
   } = useStandaloneTerrainProfile(ul, useCallback(() => setBottomTab('terrain'), []))
 
@@ -1584,65 +1585,19 @@ export default function App() {
             </div>
           )}
           {bottomTab === 'terrain' && (
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              {/* Standalone terrain profile controls */}
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-                padding: '6px 12px', borderBottom: '1px solid #21262d',
-                background: '#0d1117', flexShrink: 0,
-              }}>
-                <span style={{ fontSize: 11, color: '#8b949e', fontWeight: 600 }}>Standalone profile:</span>
-                <button
-                  className={`btn ${terrainLineMode ? 'btn-primary' : 'btn-ghost'}`}
-                  style={{ fontSize: 11, padding: '3px 10px' }}
-                  onClick={() => setTerrainLineMode(m => !m)}>
-                  {terrainLineMode ? '✏ Drawing… (right-click to finish)' : '✏ Draw line on map'}
-                </button>
-                {standaloneProfileLoading && (
-                  <span style={{ fontSize: 10, color: '#06d6a0' }}>Sampling terrain…</span>
-                )}
-                {standaloneProfileError && (
-                  <span style={{ fontSize: 10, color: '#fca5a5' }}>{standaloneProfileError}</span>
-                )}
-                {standaloneProfile && (
-                  <>
-                    <span style={{ fontSize: 10, color: '#8b949e' }}>
-                      {standaloneProfile.path.length} pts · {(standaloneProfile.totalM/1000).toFixed(2)} km · src: {standaloneProfile.source}
-                    </span>
-                    <button className="btn btn-ghost"
-                      style={{ fontSize: 11, padding: '3px 8px', color: '#fca5a5' }}
-                      onClick={() => setStandaloneProfile(null)}>Clear</button>
-                  </>
-                )}
-                <div style={{ flex: 1 }} />
-                {terrainProfile && (
-                  <span style={{ fontSize: 10, color: '#06d6a0' }}>● P2P sim profile loaded</span>
-                )}
-              </div>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                {standaloneProfile ? (
-                  <TerrainProfile
-                    profile={{
-                      distances_m: standaloneProfile.distances_m,
-                      elevations_m: standaloneProfile.elevations_m,
-                    }}
-                    standalone
-                    frequencyHz={0}
-                  />
-                ) : (
-                  <TerrainProfile
-                    profile={terrainProfile}
-                    txHeight={tx.height_m}
-                    rxHeight={rx.height_m}
-                    frequencyHz={tx.frequency_hz}
-                    propagationModel={propagation.model}
-                    waveType={propagation.wave_type}
-                    txLat={tx.lat}
-                    txLon={tx.lon}
-                  />
-                )}
-              </div>
-            </div>
+            <TerrainTab
+              terrainLineMode={terrainLineMode}
+              standaloneProfile={standaloneProfile}
+              standaloneProfileLoading={standaloneProfileLoading}
+              standaloneProfileError={standaloneProfileError}
+              onToggleLineMode={() => setTerrainLineMode(m => !m)}
+              onClearStandalone={() => setStandaloneProfile(null)}
+              terrainProfile={terrainProfile}
+              tx={tx}
+              rx={rx}
+              propagationModel={propagation.model}
+              waveType={propagation.wave_type}
+            />
           )}
           {bottomTab === 'layers' && (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>

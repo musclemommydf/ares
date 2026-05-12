@@ -79,7 +79,7 @@ export function useStandaloneTerrainProfile(ul, onReady) {
 
   return {
     terrainLineMode, setTerrainLineMode,
-    standaloneProfile, standaloneProfileLoading, standaloneProfileError,
+    standaloneProfile, setStandaloneProfile, standaloneProfileLoading, standaloneProfileError,
     handleTerrainLineComplete,
   }
 }
