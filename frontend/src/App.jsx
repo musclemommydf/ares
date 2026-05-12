@@ -41,6 +41,7 @@ import ChatPanel from './components/Panels/ChatPanel'
 import EmitterSummary from './components/Panels/EmitterSummary'
 import SavedLocations from './components/Panels/SavedLocations'
 import SpaceWxPanel from './components/Panels/SpaceWxPanel'
+import BottomPanelTabs from './components/Panels/BottomPanelTabs'
 import UasVideoPanel from './components/Tools/UasVideoPanel'
 import HelpPanel from './components/Common/HelpPanel'
 import DecibelCalculator from './components/Tools/DecibelCalculator'
@@ -1551,39 +1552,14 @@ export default function App() {
           }}
           title="Drag to resize"
         />
-        <div className="tabs" style={{ alignItems: 'center' }}>
-          <button className={`tab ${bottomTab === 'results' ? 'active' : ''}`} onClick={() => setBottomTab('results')}>Results</button>
-          <button className={`tab ${bottomTab === 'terrain' ? 'active' : ''}`} onClick={() => setBottomTab('terrain')}>Terrain Profile</button>
-          <button className={`tab ${bottomTab === 'budget' ? 'active' : ''}`} onClick={() => setBottomTab('budget')}>Link Budget</button>
-          <button className={`tab ${bottomTab === '3d' ? 'active' : ''}`} onClick={() => setBottomTab('3d')}>3D View</button>
-          <button className={`tab ${bottomTab === 'df' ? 'active' : ''}`} onClick={() => setBottomTab('df')}>DF</button>
-          <button className={`tab ${bottomTab === 'chat' ? 'active' : ''}`} onClick={() => setBottomTab('chat')}>Chat</button>
-          <button className={`tab ${bottomTab === 'dbcalc' ? 'active' : ''}`} onClick={() => setBottomTab('dbcalc')}>dB Calc</button>
-          <button className={`tab ${bottomTab === 'layers' ? 'active' : ''}`} onClick={() => setBottomTab('layers')}>
-            Layers{(ul.layers.length + ul.drawnFeatures.length) > 0 ? ` (${ul.layers.length + ul.drawnFeatures.length})` : ''}
-          </button>
-          <button className={`tab ${bottomTab === 'emitters' ? 'active' : ''}`} onClick={() => setBottomTab('emitters')}>
-            Emitter Summary
-          </button>
-          <button className={`tab ${bottomTab === 'savedlocs' ? 'active' : ''}`} onClick={() => setBottomTab('savedlocs')}>
-            Saved Locations{savedLocations.length > 0 ? ` (${savedLocations.length})` : ''}
-          </button>
-          {spaceWeather && (
-            <button className={`tab ${bottomTab === 'spacewx' ? 'active' : ''}`} onClick={() => setBottomTab('spacewx')}
-              style={{ color: bottomTab === 'spacewx' ? undefined : (spaceWeather.kp_index >= 5 ? '#ef4444' : spaceWeather.kp_index >= 3 ? '#f59e0b' : '#06d6a0') }}>
-              Space Wx
-            </button>
-          )}
-          <div style={{ flex: 1 }} />
-          <button
-            className="btn btn-ghost"
-            style={{ padding: '2px 6px', marginRight: 4, flexShrink: 0 }}
-            title="Hide bottom panel"
-            onClick={() => setBottomOpen(false)}
-          >
-            <ChevronDown size={13} />
-          </button>
-        </div>
+        <BottomPanelTabs
+          active={bottomTab}
+          onSelect={setBottomTab}
+          layerCount={ul.layers.length + ul.drawnFeatures.length}
+          savedCount={savedLocations.length}
+          spaceWeather={spaceWeather}
+          onClose={() => setBottomOpen(false)}
+        />
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {bottomTab === 'results' && (
