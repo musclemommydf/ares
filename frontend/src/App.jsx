@@ -61,6 +61,7 @@ import BestSiteSidebar from './components/Controls/BestSiteSidebar'
 import RouteSidebar from './components/Controls/RouteSidebar'
 import MultipointSidebar from './components/Controls/MultipointSidebar'
 import BestServerSidebar from './components/Controls/BestServerSidebar'
+import BsaPolygonSidebar from './components/Controls/BsaPolygonSidebar'
 import ToolBtn from './components/Common/ToolBtn'
 
 import {
@@ -1385,67 +1386,15 @@ export default function App() {
 
         {/* Best Site Polygon */}
         {activeTab === 'best_site_polygon' && (
-          <div style={{ borderTop: '1px solid #21262d', padding: '8px 12px' }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 6 }}>
-              BEST SITE — POLYGON
-            </div>
-            <div style={{ fontSize: 11, color: '#444d56', marginBottom: 8 }}>
-              Draw a polygon. Grid-sample TX locations within it and find the best.
-            </div>
-            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-              <button
-                className={`btn ${drawMode === 'polygon' ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ flex: 1, fontSize: 11, gap: 4 }}
-                onClick={() => setDrawMode(m => m === 'polygon' ? null : 'polygon')}
-              >
-                <Hexagon size={11} />
-                {drawMode === 'polygon' ? 'Click to close polygon' : 'Draw Polygon'}
-              </button>
-              {polygonCoords.length > 0 && (
-                <button
-                  className="btn btn-ghost"
-                  style={{ fontSize: 11, color: '#ef4444' }}
-                  onClick={() => { setPolygonCoords([]); setDrawMode(null) }}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            {polygonCoords.length > 0 && (
-              <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 8 }}>
-                {polygonCoords.length} vertices
-              </div>
-            )}
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ fontSize: 11, color: '#8b949e', display: 'block', marginBottom: 4 }}>
-                Sample Density: {polygonBsaCoveragePct}%
-              </label>
-              <input
-                type="range" min={5} max={100} step={5}
-                value={polygonBsaCoveragePct}
-                onChange={e => setPolygonBsaCoveragePct(Number(e.target.value))}
-                style={{ width: '100%' }}
-              />
-            </div>
-            {polygonBsaResult?.sites && (
-              <div style={{ padding: 8, background: '#0d1117', borderRadius: 4, border: '1px solid #21262d' }}>
-                <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 4 }}>
-                  Best of {polygonBsaResult.num_candidates} candidates:
-                </div>
-                {polygonBsaResult.sites.slice(0, 3).map((s, i) => (
-                  <div key={i} style={{
-                    fontSize: 11, padding: '2px 0', borderBottom: '1px solid #21262d',
-                    display: 'flex', justifyContent: 'space-between',
-                  }}>
-                    <span style={{ color: i === 0 ? '#06d6a0' : '#c9d1d9' }}>
-                      {i + 1}. {s.lat?.toFixed(4)}, {s.lon?.toFixed(4)}
-                    </span>
-                    <span style={{ color: '#8b949e' }}>{s.covered_area_km2} km²</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <BsaPolygonSidebar
+            drawMode={drawMode}
+            polygonCoords={polygonCoords}
+            coveragePct={polygonBsaCoveragePct}
+            result={polygonBsaResult}
+            onToggleDraw={() => setDrawMode(m => m === 'polygon' ? null : 'polygon')}
+            onClearPolygon={() => { setPolygonCoords([]); setDrawMode(null) }}
+            onSetCoveragePct={setPolygonBsaCoveragePct}
+          />
         )}
 
         {/* Ray trace */}
