@@ -25,6 +25,7 @@ import AtakServerPanel from './components/Tools/AtakServerPanel'
 import AppModals from './components/AppModals'
 import OverflowMenu from './components/Header/OverflowMenu'
 import HeaderTabs from './components/Header/HeaderTabs'
+import HeaderActions from './components/Header/HeaderActions'
 import SdrPanel from './components/Tools/SdrPanel'
 import { useUserLayers } from './hooks/useUserLayers'
 import { useStandaloneTerrainProfile } from './hooks/useStandaloneTerrainProfile'
@@ -1182,92 +1183,22 @@ export default function App() {
           onSelectTab={(id) => { setActiveTab(id); setDrawMode(null); if (id === 'radar') setPropagation(prev => ({ ...prev, model: 'radar' })) }}
         />
 
-        <div className="header-spacer" />
-
-        {/* GPU badge */}
-        {propagation.use_gpu && (
-          <span className="header-badge active" style={{ flexShrink: 0 }}>GPU</span>
-        )}
-
-        {/* Clear */}
-        <button
-          className="btn btn-ghost"
-          title="Clear all map layers"
-          style={{ gap: 4, fontSize: 11, flexShrink: 0 }}
-          onClick={() => {
-            if (mainMode === 'geolocation') { setLobs([]); setCapGroups({}) }
-            else { handleClearLayers() }
-          }}
-        >
-          <Trash2 size={13} />
-        </button>
-
-        {/* ATAK / Server console */}
-        <button
-          className="btn btn-ghost"
-          title="ATAK / Server — offline data packs, radio templates, server status"
-          style={{ gap: 4, fontSize: 11, flexShrink: 0 }}
-          onClick={() => setAtakPanelOpen(true)}
-        >
-          <Server size={13} />
-        </button>
-
-        {/* SDR / DF console — live KrakenSDR / Matchstiq X40 / generic bearings → CoT to ATAK */}
-        <button
-          className={`btn ${sdrFeatures.length || sdrCoverage ? 'btn-primary' : 'btn-ghost'}`}
-          title="SDR console — connect single-channel (spectrum/audio) or multi-channel (DF) SDRs; bearings/fixes/auto-coverage stream to ATAK"
-          style={{ gap: 4, fontSize: 11, flexShrink: 0 }}
-          onClick={() => setSdrPanelOpen(true)}
-        >
-          <Radio size={13} />
-        </button>
-
-        {/* UAS Video — drone video-downlink scanner / decoder / PED */}
-        <button
-          className="btn btn-ghost"
-          title="UAS Video — scan a band for drone video downlinks (analog · DVB-T/T2/S/S2 · COFDM · …), decode/characterise, exploit the MPEG-TS → MISB metadata → footprint → ATAK"
-          style={{ gap: 4, fontSize: 11, flexShrink: 0 }}
-          onClick={() => setUasPanelOpen(true)}
-        >
-          <Video size={13} />
-        </button>
-
-        {/* Run */}
-        {mainMode === 'propagation' && activeTab === 'coverage' && (
-          <label title="Per-pixel raster coverage — one ITM path per grid cell (even coverage everywhere, no thinning at range; heavier than the radial sweep)"
-                 style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: coverageRaster ? '#06d6a0' : '#8b949e', flexShrink: 0, cursor: 'pointer' }}>
-            <input type="checkbox" checked={coverageRaster} onChange={e => setCoverageRaster(e.target.checked)} /> raster
-          </label>
-        )}
-        {mainMode === 'propagation' && (
-          <button
-            className={`btn ${isSimulating ? 'btn-secondary' : 'btn-primary'}`}
-            style={{ gap: 6, fontSize: 13, padding: '5px 14px', flexShrink: 0,
-                     opacity: (isSimulating || !txActive) ? 0.5 : 1 }}
-            onClick={runSimulation}
-            disabled={isSimulating || !txActive}
-            title={!txActive ? 'Right-click the map to place an emitter first' : undefined}
-          >
-            {isSimulating ? (
-              <><div className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} />Simulating…</>
-            ) : (
-              <><Zap size={14} />Run</>
-            )}
-          </button>
-        )}
-
-        {isSimulating && (
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, height: 3,
-            background: 'var(--bg-tertiary)',
-          }}>
-            <div style={{
-              height: '100%', width: `${progress}%`,
-              background: 'var(--accent-blue)',
-              transition: 'width 0.3s ease',
-            }} />
-          </div>
-        )}
+        <HeaderActions
+          gpuActive={propagation.use_gpu}
+          mainMode={mainMode}
+          activeTab={activeTab}
+          coverageRaster={coverageRaster}
+          onSetRaster={setCoverageRaster}
+          isSimulating={isSimulating}
+          progress={progress}
+          txActive={txActive}
+          sdrActive={!!(sdrFeatures.length || sdrCoverage)}
+          onClear={() => { if (mainMode === 'geolocation') { setLobs([]); setCapGroups({}) } else { handleClearLayers() } }}
+          onOpenAtak={() => setAtakPanelOpen(true)}
+          onOpenSdr={() => setSdrPanelOpen(true)}
+          onOpenUas={() => setUasPanelOpen(true)}
+          onRun={runSimulation}
+        />
       </header>
 
       {/* ── Modals ──────────────────────────────────────────────────────── */}
