@@ -66,8 +66,10 @@ def test_itm():
     # Output-stability pins: these are the values the ITS port currently produces for
     # benign flat-ground cases (climate 5, Ns=301, vertical pol., q=0.5). They sit in the
     # right ballpark vs. the literature/ITM area-mode (≈130–150 dB at 50 km VHF/UHF over
-    # flat ground) — pinning them catches future drift. Bit-for-bit NTIA `itm.cpp`
-    # validation needs the C reference and is the remaining hardening step.
+    # flat ground) — pinning them catches future drift. The closed-form ITM helpers
+    # (aknfe / fht / h0f / ahd / qerfi) and the FSL formula are bit-validated against the
+    # reference equations in `test_itm_validation`, which also runs the full point-to-point
+    # port against NTIA's `TestData` CSV when it's dropped at `tests/data/itm_reference.csv`.
     from app.core.propagation.itm_its import itm_reference_check
     rc = {(c["f_mhz"], c["d_km"]): c for c in itm_reference_check()}
     pins = {(100.0, 50): (134.4, 7.1), (1000.0, 50): (140.9, 8.1), (10000.0, 50): (146.0, 9.5)}
@@ -543,8 +545,116 @@ def test_ml_classifier():
     check("without a v2 descrambler, a DroneID v2 frame keeps the obfuscated tail and notes the hook",
           ("set_droneid_v2_descrambler" in (r.parse_dji_droneid(scrambled).get("note") or "")) and not r.parse_dji_droneid(scrambled).get("v2_descrambled"))
 
+
+# ── ITM bit-validation ──────────────────────────────────────────────────────
+def test_itm_validation():
+    """Bit-validates the parts of the ITS Longley-Rice port that have exact closed-form
+    references — the named NTIA `itm.cpp` helper functions (aknfe / fht / h0f / ahd / qerfi)
+    and the free-space-loss formula — by recomputing each from the reference equations and
+    asserting equality to ~1e-12 (qerfi to the A&S-26.2.23 fit accuracy, ~5e-4). And, if
+    `tests/data/itm_reference.csv` is present (drop NTIA's `TestData` there — columns
+    f_mhz,d_km,h1_m,h2_m,climate,pol,ns,eps,sgm,q_time,q_loc,q_situ,dh_m,expected_loss_db),
+    runs the *full* point-to-point port against every row and asserts |loss - expected| < 0.01 dB."""
+    print("ITM bit-validation — closed-form helpers + FSL exact (+ NTIA TestData if present):")
+    import math as _m, os as _os, csv as _csv
+    from app.core.propagation.itm_its import _aknfe, _fht, _h0f, _ahd, _qerfi, itm_point_to_point, IrregularTerrainModel as _M
+
+    # --- aknfe(ν²): 6.02 + 9.11√v2 − 1.27 v2  (v2<5.76)  |  12.953 + 10·log10(v2)  (else) ---
+    def ref_aknfe(v2):
+        return (6.02 + 9.11 * _m.sqrt(v2) - 1.27 * v2) if v2 < 5.76 else (12.953 + 10.0 * _m.log10(v2))
+    check("ITM aknfe(ν²) == the reference Fresnel-Kirchhoff knife-edge formula (both branches)",
+          all(abs(_aknfe(v2) - ref_aknfe(v2)) < 1e-12 for v2 in (0.0, 0.5, 1.0, 4.0, 5.75, 5.76, 9.0, 100.0, 1.0e6)),
+          f"aknfe(0)={_aknfe(0.0)}, aknfe(9)={_aknfe(9.0):.6f}")
+
+    # --- fht(x, pk): smooth-earth residue-series asymptotic ---
+    def ref_fht(x, pk):
+        if x < 200.0:
+            w = -_m.log(pk)
+            if pk < 1.0e-5 or x * w * w * w > 5495.0:
+                v = -117.0
+                if x > 1.0:
+                    v = 40.0 * _m.log10(x) + v
+                return v
+            return 2.5e-5 * x * x / pk - 8.686 * w - 15.0
+        v = 0.05751 * x - 10.0 * _m.log10(x)
+        if x < 2000.0:
+            w = 0.0134 * x * _m.exp(-0.005 * x)
+            v = (1.0 - w) * v + w * (40.0 * _m.log10(x) - 117.0)
+        return v
+    fht_cases = [(2.0, 1e-7), (50.0, 1e-3), (199.0, 1e-4), (200.0, 1e-3), (500.0, 1e-2), (1999.0, 1e-2), (5000.0, 1e-2)]
+    check("ITM fht(x, pk) == the reference height-gain residue-series formula",
+          all(abs(_fht(x, pk) - ref_fht(x, pk)) < 1e-9 for x, pk in fht_cases),
+          f"fht(500,1e-2)={_fht(500.0, 1e-2):.6f}")
+
+    # --- h0f(r, et): forward-scatter frequency-gain (TN101 table interpolation) ---
+    A = (25.0, 80.0, 177.0, 395.0, 705.0); B = (24.0, 45.0, 68.0, 80.0, 105.0)
+    def ref_h0f(r, et):
+        it = int(et); q = 0.0
+        if it <= 0: it = 1
+        elif it >= 5: it = 5
+        else: q = et - it
+        x = (1.0 / r) ** 2
+        v = 4.343 * _m.log((A[it - 1] * x + B[it - 1]) * x + 1.0)
+        if q != 0.0:
+            v = (1.0 - q) * v + q * 4.343 * _m.log((A[it] * x + B[it]) * x + 1.0)
+        return v
+    h0f_cases = [(0.5, 1), (1.0, 2), (2.0, 2.7), (3.0, 4), (5.0, 5), (1.5, 3.3), (0.8, 0.5)]
+    check("ITM h0f(r, et) == the reference forward-scatter frequency-gain (incl. the et interpolation)",
+          all(abs(_h0f(r, et) - ref_h0f(r, et)) < 1e-12 for r, et in h0f_cases),
+          f"h0f(2,2.7)={_h0f(2.0, 2.7):.6f}")
+
+    # --- ahd(td): scatter-distance function, piecewise a + b·td + c·log10(td) ---
+    def ref_ahd(td):
+        if td <= 10e3: a, b, c = 133.4, 0.332e-3, -10.0
+        elif td <= 70e3: a, b, c = 104.6, 0.212e-3, -2.5
+        else: a, b, c = 71.8, 0.157e-3, 5.0
+        return a + b * td + c * _m.log10(td)
+    check("ITM ahd(td) == the reference scatter-distance piecewise formula (segments + breakpoints)",
+          all(abs(_ahd(td) - ref_ahd(td)) < 1e-12 for td in (5e3, 10e3, 30e3, 70e3, 1e5, 5e5)),
+          f"ahd(30km)={_ahd(30e3):.6f}")
+
+    # --- qerfi(q): inverse complementary normal CDF (A&S 26.2.23 fit, ~4.5e-4) ---
+    check("ITM qerfi(q) gives the standard-normal deviates at q ∈ {0.5,0.1587,0.8413,0.0228,0.9772}",
+          abs(_qerfi(0.5)) < 5e-4 and abs(_qerfi(0.158655) - 1.0) < 5e-4 and abs(_qerfi(0.841345) + 1.0) < 5e-4
+          and abs(_qerfi(0.022750) - 2.0) < 5e-4 and abs(_qerfi(0.977250) + 2.0) < 5e-4,
+          f"qerfi(0.5)={_qerfi(0.5):.6f}, qerfi(0.1587)={_qerfi(0.158655):.6f}, qerfi(0.0228)={_qerfi(0.022750):.6f}")
+
+    # --- free-space loss == itm.cpp's 32.45 + 20log10(d_km) + 20log10(f_MHz), exact ---
+    fsl_ok = True
+    for fm in (30.0, 100.0, 433.0, 1000.0, 5800.0, 18000.0):
+        for dk in (1.0, 5.0, 20.0, 100.0):
+            r = itm_point_to_point([100.0] * (int(dk) + 1 if dk < 200 else 51), dk * 1000.0,
+                                   tx_height_m=200.0, rx_height_m=20.0, frequency_mhz=fm, surface_refractivity=301.0)
+            exp = 32.45 + 20.0 * _m.log10(dk) + 20.0 * _m.log10(fm)
+            if abs(r.free_space_loss_db - exp) > 1e-9:
+                fsl_ok = False
+    check("ITM free-space loss == 32.45 + 20·log10(d_km) + 20·log10(f_MHz) bit-exactly (matches itm.cpp's FSL)", fsl_ok)
+
+    # --- full-port bit-validation against NTIA TestData, if supplied ---
+    csv_path = _os.path.join(_os.path.dirname(__file__), "data", "itm_reference.csv")
+    if _os.path.exists(csv_path):
+        bad = ok = 0
+        with open(csv_path, newline="") as fh:
+            for row in _csv.DictReader(fh):
+                try:
+                    dk = float(row["d_km"]); n = max(2, int(dk) + 1 if dk < 300 else 51)
+                    res = itm_point_to_point([0.0] * n, dk * 1000.0,
+                                             tx_height_m=float(row["h1_m"]), rx_height_m=float(row["h2_m"]),
+                                             frequency_mhz=float(row["f_mhz"]), surface_refractivity=float(row.get("ns", 301)),
+                                             eps_r=float(row.get("eps", 15)), sigma=float(row.get("sgm", 0.005)),
+                                             polarization=int(row.get("pol", 1)), climate=int(row.get("climate", 5)),
+                                             pct_time=float(row.get("q_time", 0.5)), pct_locations=float(row.get("q_loc", 0.5)),
+                                             pct_situations=float(row.get("q_situ", 0.5)))
+                    if abs(res.path_loss_db - float(row["expected_loss_db"])) < 0.01: ok += 1
+                    else: bad += 1
+                except Exception:
+                    bad += 1
+        check(f"ITM full-port bit-validation vs NTIA TestData ({ok + bad} cases, |Δ| < 0.01 dB)", bad == 0, f"{ok} ok / {bad} mismatched")
+    else:
+        check("ITM full-port NTIA-TestData validation: data not present (drop NTIA's TestData CSV at tests/data/itm_reference.csv to run it)", True)
+
 if __name__ == "__main__":
-    for fn in (test_itm, test_df, test_tdoa, test_sgp4, test_hf, test_interferometry, test_security, test_uas_video, test_video_exploit, test_remote_id, test_ml_classifier):
+    for fn in (test_itm, test_itm_validation, test_df, test_tdoa, test_sgp4, test_hf, test_interferometry, test_security, test_uas_video, test_video_exploit, test_remote_id, test_ml_classifier):
         try:
             fn()
         except Exception as e:
