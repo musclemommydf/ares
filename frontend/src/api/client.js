@@ -388,3 +388,11 @@ export async function deleteUasSession(sid) { const { data } = await api.delete(
 export async function exploitUasSession(sid) { const { data } = await api.post(`/uas/sessions/${sid}/exploit`); return data }
 export async function characterizeUas(body) { const { data } = await api.post('/uas/exploit/characterize', body); return data }
 export async function getUasExploitStatus() { const { data } = await api.get('/uas/exploit/status'); return data }
+
+// Remote ID / DJI DroneID
+export async function getRidStatus() { const { data } = await api.get('/uas/rid/status'); return data }
+export async function parseRid(hex, format = 'auto') { const { data } = await api.post('/uas/rid/parse', { hex, format }); return data }
+export async function decodeRid(body) { const { data } = await api.post('/uas/rid/decode', body); return data }
+export async function getRidSessions() { const { data } = await api.get('/uas/rid/sessions'); return data }
+export async function getRidSessionMetadata(sid) { const { data } = await api.get(`/uas/rid/sessions/${sid}/metadata`); return data }
+export async function deleteRidSession(sid) { const { data } = await api.delete(`/uas/rid/sessions/${sid}`); return data }

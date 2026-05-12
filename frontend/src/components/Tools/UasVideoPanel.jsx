@@ -22,6 +22,7 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
   const [metadata, setMetadata] = useState(null)
   const [exploit, setExploit] = useState(null)
   const [showRef, setShowRef] = useState(false)
+  const [decodeFreqMHz, setDecodeFreqMHz] = useState('5800')
   const pollRef = useRef(null)
 
   useEffect(() => {
@@ -64,6 +65,13 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
       setSession(s)
     } catch (e) { setScanErr('Decode start failed: ' + (e?.response?.data?.detail || e?.message || e)) }
   }
+  const decodeAtFreq = async () => {
+    setExploit(null); setMetadata(null); setScanErr('')
+    try {
+      const s = await startUasDecode({ device_id: deviceId || undefined, frequency_hz: Number(decodeFreqMHz) * 1e6, bandwidth_hz: 8e6, push_to_atak: true })
+      if (s.error) setScanErr(s.error); else setSession(s)
+    } catch (e) { setScanErr('Decode failed: ' + (e?.response?.data?.detail || e?.message || e)) }
+  }
   const stopSession = async () => { if (session?.id) { try { await deleteUasSession(session.id) } catch {} } setSession(null); setMetadata(null); setExploit(null) }
   const runExploit = async () => { if (!session?.id) return; try { setExploit(await exploitUasSession(session.id)) } catch (e) { setExploit({ error: e?.response?.data?.detail || String(e) }) } }
   const addToMap = () => {
@@ -95,6 +103,11 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
               <a onClick={() => { setStartMHz('1040'); setStopMHz('1360') }} style={{ cursor: 'pointer', color: '#58a6ff' }}>1.2 GHz</a> ·&nbsp;
               <a onClick={() => { setStartMHz('2370'); setStopMHz('2510') }} style={{ cursor: 'pointer', color: '#58a6ff' }}>2.4 GHz</a>
             </span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end', marginTop: 8, borderTop: '1px solid #21262d', paddingTop: 8 }}>
+            <label style={{ fontSize: 11, color: '#8b949e' }}>Or — tune & let Ares auto-detect:<br /><input type="number" value={decodeFreqMHz} onChange={e => setDecodeFreqMHz(e.target.value)} style={{ width: 100, fontSize: 11 }} /> MHz</label>
+            <button className="btn btn-primary" onClick={decodeAtFreq} style={{ gap: 6 }}>Detect & decode @ {decodeFreqMHz} MHz</button>
+            <span style={{ fontSize: 10, color: '#6e7681' }}>scans a window around the tune freq, classifies it (or falls back to the channel plan), then opens the decode session + video pane.</span>
           </div>
           {scanErr && <div style={{ fontSize: 11, color: '#f0883e', marginTop: 6 }}>{scanErr}</div>}
         </div>
@@ -135,6 +148,17 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
             </div>
             {session.message && <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 6 }}>{session.message}</div>}
             {session.pipeline?.length > 0 && <div style={{ fontSize: 10, color: '#6e7681', marginBottom: 6 }}>pipeline: {session.pipeline.join(' → ')}</div>}
+            {session.auto_detected && <div style={{ fontSize: 10, color: '#3fb950', marginBottom: 6 }}>auto-detected{session.auto_detected.from ? ` (${session.auto_detected.from})` : ''} — {Math.round((session.auto_detected.confidence || 0) * 100)}% confident{session.auto_detected.alternatives?.length ? `; alt: ${session.auto_detected.alternatives.map(a => a.feed_type).join(', ')}` : ''}</div>}
+
+            {/* video pane (real frames once a demod chain + capture backend are present; otherwise the live MISB readout) */}
+            {session.status === 'started' ? (
+              <video controls autoPlay muted playsInline style={{ width: '100%', maxHeight: 300, background: '#000', borderRadius: 6, marginBottom: 8 }} src={`/api/v1/uas/sessions/${session.id}/stream`} />
+            ) : (
+              <div style={{ ...card, background: '#000', borderRadius: 6, marginBottom: 8, padding: 16, minHeight: 120, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
+                <div style={{ fontSize: 12, color: '#8b949e' }}>{session.transport === 'proprietary' ? 'Proprietary / encrypted feed — characterise & geolocate only (no decryptable video).' : 'Awaiting a demod chain + capture backend — see the note below; the player is wired to the stream URL.'}</div>
+                {klv && <div style={{ fontSize: 11, color: '#22d3ee', marginTop: 8 }}>live MISB: {klv.platform_call_sign || 'UAS'} @ {klv.sensor_lat_deg?.toFixed(4)}, {klv.sensor_lon_deg?.toFixed(4)} · {klv.sensor_true_alt_m?.toFixed(0)} m · slant {klv.slant_range_m?.toFixed(0)} m{klv._synthetic ? ' (synthetic)' : ''}</div>}
+              </div>
+            )}
 
             {klv && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 6, fontSize: 11, marginBottom: 6 }}>
