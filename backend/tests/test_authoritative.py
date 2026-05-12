@@ -496,8 +496,55 @@ def struct_pack_i(deg):
     import struct
     return struct.pack("<i", int(round(deg * 1e7)))
 
+
+# ── optional ML signal-classifier stage + DJI DroneID v2 descrambler hook ───
+def test_ml_classifier():
+    print("ML signal classifier — features, Classifier wrapper, registration, v2-descramble hook:")
+    import numpy as _np
+    from app.core.sdr import ml_signal_classifier as ml, uas_video as u, video_exploit as ve, remote_id as r
+    chk_classes = set(ml.DEFAULT_CLASSES)
+    check("DEFAULT_CLASSES are all known feed-type ids (or 'unknown_*')",
+          all(c in {f["id"] for f in u.FEED_TYPES} or c.startswith("unknown_") for c in chk_classes) and len(chk_classes) >= 12)
+    rng = _np.random.default_rng(11)
+    iq = (rng.standard_normal(20000) + 1j * rng.standard_normal(20000)).astype(_np.complex64)
+    fv = ml.feature_vector(iq, 8e6)
+    check("feature_vector is a fixed-length float32 vector",
+          isinstance(fv, _np.ndarray) and fv.dtype == _np.float32 and fv.shape == (len(ml.FEATURE_NAMES),))
+    check("feature_dict of a too-short snapshot is all zeros", all(v == 0.0 for v in ml.feature_dict(_np.zeros(100, _np.complex64), 1e6).values()))
+    # a dummy callable model favouring 'dvbt'
+    def _dummy(feat):
+        z = _np.full(len(ml.DEFAULT_CLASSES), -1.0); z[ml.DEFAULT_CLASSES.index("dvbt")] = 3.0; return z
+    res = ml.Classifier(_dummy).classify(iq, 8e6)
+    check("Classifier.classify -> {feed_type, confidence in (0,1], probs}",
+          res.get("feed_type") == "dvbt" and 0.0 < res.get("confidence", 0.0) <= 1.0 and isinstance(res.get("probs"), dict))
+    check("register('x.onnx') without onnxruntime/torch fails gracefully (no raise)",
+          ml.register("does-not-exist.onnx").get("registered") is False)
+    # registered ML verdict is ensembled into video_exploit.classify_modulation
+    u.set_ml_classifier(lambda a, fs, band=None: ml.Classifier(_dummy).classify(a, fs, band))
+    try:
+        mo = ve.classify_modulation(iq, 8e6)
+        check("a registered ML classifier surfaces as classify_modulation()['ml']", isinstance(mo.get("ml"), dict) and mo["ml"].get("feed_type") == "dvbt")
+    finally:
+        u.set_ml_classifier(None)
+    check("ml_signal_classifier.status() is coherent",
+          "feature_extractor" in ml.status() and isinstance(ml.status().get("onnxruntime"), bool) and ml.status().get("registered") is False)
+    # DJI DroneID v2 descrambler hook
+    import struct as _st
+    pv1 = bytearray(64); pv1[0] = 0x02; pv1[2:18] = b"0M0Q123456789ABC"
+    pv1[18:22] = _st.pack("<i", int(-115.2 * 1e7)); pv1[22:26] = _st.pack("<i", int(36.2 * 1e7))
+    scrambled = bytes(b ^ 0x5A for b in pv1)
+    r.set_droneid_v2_descrambler(lambda data: bytes(b ^ 0x5A for b in data))
+    try:
+        d = r.parse_dji_droneid(scrambled)
+        check("with a registered v2 descrambler, a DroneID v2 frame de-obfuscates and parses",
+              d.get("v2_descrambled") is True and d.get("serial") == "0M0Q123456789ABC" and abs(d.get("drone_lat", 0.0) - 36.2) < 1e-4)
+    finally:
+        r.set_droneid_v2_descrambler(None)
+    check("without a v2 descrambler, a DroneID v2 frame keeps the obfuscated tail and notes the hook",
+          ("set_droneid_v2_descrambler" in (r.parse_dji_droneid(scrambled).get("note") or "")) and not r.parse_dji_droneid(scrambled).get("v2_descrambled"))
+
 if __name__ == "__main__":
-    for fn in (test_itm, test_df, test_tdoa, test_sgp4, test_hf, test_interferometry, test_security, test_uas_video, test_video_exploit, test_remote_id):
+    for fn in (test_itm, test_df, test_tdoa, test_sgp4, test_hf, test_interferometry, test_security, test_uas_video, test_video_exploit, test_remote_id, test_ml_classifier):
         try:
             fn()
         except Exception as e:

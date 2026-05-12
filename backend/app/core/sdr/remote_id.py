@@ -211,18 +211,41 @@ def encode_f3411_pack(*, serial: str, ua_type: int = 2, lat: float, lon: float, 
 
 
 # ── DJI DroneID (best-effort plaintext parser) ───────────────────────────────
+# DroneID v2's payload tail is obfuscated (AES-CTR with a fixed, *published* key + a
+# packet-derived nonce — reverse-engineered and shipped in the open `dji_droneid`
+# tooling; a fixed published descramble, not a comms decrypt). Ares does not vendor the
+# key; a deployment registers a descrambler — `set_droneid_v2_descrambler(fn)` where
+# `fn(payload: bytes) -> bytes` returns the de-obfuscated payload — and `parse_dji_droneid`
+# applies it before parsing. Without one, the plaintext header is parsed and the tail left as-is.
+_DRONEID_V2_DESCRAMBLER = None
+
+
+def set_droneid_v2_descrambler(fn):
+    """Register (or clear with None) a `fn(payload: bytes) -> bytes` that de-obfuscates a
+    DJI DroneID v2 payload (e.g. wrapping the open `dji_droneid` AES-CTR descramble + key)."""
+    global _DRONEID_V2_DESCRAMBLER
+    _DRONEID_V2_DESCRAMBLER = fn
+
 DJI_OUI = bytes.fromhex("60601f")  # the DJI vendor OUI seen in the WiFi vendor IE / beacon
 
 
 def parse_dji_droneid(data: bytes) -> dict:
     """Best-effort parse of a (de-framed) DJI DroneID payload. Handles the documented
-    v1 plaintext layout; for v2, the obfuscated tail is identified and left to the
-    published key + the open ``dji_droneid`` decoder. Real frames vary by firmware —
-    treat unset fields as 'not in this layout'."""
+    v1 plaintext layout; for v2, a registered descrambler (see ``set_droneid_v2_descrambler``)
+    de-obfuscates the tail first, else only the plaintext header is parsed. Real frames vary
+    by firmware — treat unset fields as 'not in this layout'."""
     data = bytes(data)
     out: dict = {"format": "dji_droneid", "len": len(data)}
     if len(data) < 24:
         return {**out, "error": "too short"}
+    if (data[0] & 0x0F) >= 2 and _DRONEID_V2_DESCRAMBLER is not None:
+        try:
+            d2 = _DRONEID_V2_DESCRAMBLER(data)
+            if isinstance(d2, (bytes, bytearray)) and len(d2) >= 24:
+                data = bytes(d2)
+                out["v2_descrambled"] = True
+        except Exception as e:  # pragma: no cover
+            out["v2_descramble_error"] = str(e)
     # a common v1 layout: [0:2] state flags, [2:18] serial (ASCII), [18:22] lon int32 (deg*1e7),
     # [22:26] lat int32 (deg*1e7), [26:28] alt (int16, m), [28:30] height (int16, dm), then home/pilot.
     ver = data[0] & 0x0F
@@ -253,10 +276,10 @@ def parse_dji_droneid(data: bytes) -> dict:
                 out["operator_lat"], out["operator_lon"] = round(plat, 7), round(plon, 7)
     except Exception as e:  # pragma: no cover
         out["parse_error"] = str(e)
-    if ver >= 2:
-        out["note"] = ("DroneID v2: part of the payload is obfuscated (AES-CTR with a fixed, published key + a "
-                       "packet-derived IV) — Ares structure-parses the plaintext header; wire the open `dji_droneid` "
-                       "decoder (which carries the key) for the full v2 fields. This is a fixed published descrambling, "
+    if ver >= 2 and not out.get("v2_descrambled"):
+        out["note"] = ("DroneID v2: the payload tail is obfuscated (AES-CTR, fixed published key + packet-derived nonce) "
+                       "— Ares parsed the plaintext header. Register a descrambler with set_droneid_v2_descrambler(fn) "
+                       "(wrap the open `dji_droneid` AES-CTR + key) for the full v2 fields. A fixed published descramble, "
                        "not a comms decrypt.")
     return out
 

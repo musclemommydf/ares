@@ -24,6 +24,7 @@ from app.core.security import audit
 from app.core.sdr import uas_video
 from app.core.sdr import video_exploit
 from app.core.sdr import remote_id
+from app.core.sdr import ml_signal_classifier
 from app.core.sdr import sdr_manager
 
 try:  # CoT push is best-effort — never let an export hiccup fail the request
@@ -313,4 +314,12 @@ def rid_stop(sid: str, _auth=Depends(require_auth)):
     if ok:
         audit("uas.rid.session.stop", session=sid)
     return {"removed": ok}
+
+@router.get("/ml/status")
+def ml_status():
+    """Status of the optional ML signal-classifier stage: which runtimes (onnxruntime /
+    torch) are available, the feature names, the default class set, and whether a model
+    is registered. A trained model is deployment-supplied — see ml_signal_classifier's
+    docstring for how to train and register one."""
+    return ml_signal_classifier.status()
 
