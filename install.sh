@@ -42,7 +42,7 @@ WITH_SOAPYSDR=true
 WITH_GPSD=false
 usage() {
     cat <<'EOF'
-Ares ATAK installer
+Ares installer
 
   ./install.sh [options]
 
@@ -89,7 +89,7 @@ done
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║              Ares  Installer v5.1 (authoritative)                ║${NC}"
+echo -e "${BOLD}║               Ares  Installer v5.1               ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 
