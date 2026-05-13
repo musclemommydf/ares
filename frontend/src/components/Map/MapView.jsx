@@ -185,6 +185,8 @@ export default function MapView({
   drawMode = null,   // null | 'bounds' | 'polygon' | 'route' | 'multipoint' | 'manet'
   onDrawComplete,    // callback(type, coords)
   extraGeojsonLayers = [],   // [{id, geojson, color?}] — for MANET, route, satellite results
+  bestSiteCandidates = [],   // [{lat, lon, label}] — candidate sites clicked on the map (Best Site tab)
+  bestSiteResult = null,     // { sites: [{lat, lon, ...}], ... } — ranking result; sites[0] is the winner
   // Geolocation / LoB props
   lobs = [],         // array of LoB objects
   lobGroups = [],    // pre-computed frequency groups (from App.jsx useMemo)
@@ -196,6 +198,7 @@ export default function MapView({
   txActive = false,  // false = no TX marker on map yet
   onAddEmitter,      // (lat, lon) → place/move primary emitter
   onAddLoBObserver,  // (lat, lon) → pre-fill LoB observer location
+  onDownloadRegionAt,  // (lat, lon) → open the Layer Manager and pre-select the region containing that point
   onAddLoBAzimuthTarget,  // (lat, lon) → set the bearing target for the LoB form
   // Map display options (now in the floating-toolbar ⚙ MapSettingsCog)
   showCompassRose = false, setShowCompassRose,
@@ -229,6 +232,7 @@ export default function MapView({
   const drawRef = useRef({ points: [], markers: [], lines: [], rect: null })
   const drawModeRef = useRef(drawMode)
   const extraGeoLayersRef = useRef({})   // id → L.GeoJSON layer
+  const bestSiteLayerRef = useRef(null)  // L.LayerGroup for the Best-Site candidate markers
   const lobLayerGroupRef = useRef(null)  // L.LayerGroup for all LoB visuals
   const onMapClickRef = useRef(onMapClick)  // kept current so the stale click closure sees latest callback
   // Multi-ruler refs
@@ -376,17 +380,48 @@ export default function MapView({
     })
     ro.observe(mapRef.current)
 
-    // Declutter permanent feature labels: full opacity at z ≥ 11, fading to 0 by
-    // z ≤ 6, fully hidden ≤ 6 (so they don't overlap when zoomed out).
+    // Declutter the permanent feature labels (imported placemark names, etc.):
+    //  1) they only appear once you're reasonably zoomed in — hidden below z LABEL_HIDE_BELOW,
+    //     fading in to full opacity at z LABEL_FULL_AT (so a zoomed-out view isn't a wall of text);
+    //  2) labels that would overlap each other are hidden, greedily, top-to-bottom — so the
+    //     ones that do show stay legible (neither gets buried under another).
+    const LABEL_HIDE_BELOW = 9, LABEL_FULL_AT = 13
     const updateLabelVisibility = () => {
       const pane = map.getPanes?.()?.tooltipPane
       if (!pane) return
       const z = map.getZoom()
-      if (z <= 6) { pane.style.display = 'none'; return }
+      if (z < LABEL_HIDE_BELOW) { pane.style.display = 'none'; return }
       pane.style.display = ''
-      pane.style.opacity = z >= 11 ? '1' : String(Math.max(0, Math.min(1, (z - 6) / 5)))
+      pane.style.opacity = z >= LABEL_FULL_AT
+        ? '1'
+        : String(Math.max(0.12, Math.min(1, (z - (LABEL_HIDE_BELOW - 1)) / (LABEL_FULL_AT - (LABEL_HIDE_BELOW - 1)))))
+      // overlap declutter — reset everything to visible, then hide labels whose
+      // box collides with one we've already decided to keep (stable top→bottom order).
+      const labels = pane.querySelectorAll('.mv-feature-label')
+      for (const el of labels) el.style.visibility = ''
+      if (labels.length < 2) return
+      const measured = []
+      for (const el of labels) {
+        const r = el.getBoundingClientRect()
+        if (r.width > 0 && r.height > 0) measured.push({ el, r })
+      }
+      measured.sort((a, b) => (a.r.top - b.r.top) || (a.r.left - b.r.left))
+      const PAD = 2
+      const kept = []
+      for (const { el, r } of measured) {
+        const hit = kept.some(k => !(r.right + PAD < k.left || r.left - PAD > k.right ||
+                                     r.bottom + PAD < k.top || r.top - PAD > k.bottom))
+        if (hit) el.style.visibility = 'hidden'
+        else kept.push(r)
+      }
     }
-    map.on('zoomend', updateLabelVisibility)
+    let _labelTimer = null
+    const scheduleLabelUpdate = () => {
+      if (_labelTimer) return
+      _labelTimer = setTimeout(() => { _labelTimer = null; updateLabelVisibility() }, 120)
+    }
+    map.on('zoomend moveend', updateLabelVisibility)
+    map.on('layeradd layerremove', scheduleLabelUpdate)   // catch imported-layer label changes
     updateLabelVisibility()
 
     tileRef.current = L.tileLayer(TILE_LAYERS.dark.url, {
@@ -549,6 +584,7 @@ export default function MapView({
 
     return () => {
       try { ro.disconnect() } catch { /* noop */ }
+      if (_labelTimer) { clearTimeout(_labelTimer); _labelTimer = null }
       try { map.remove() } catch { /* noop */ }
       leafletRef.current = null
     }
@@ -668,7 +704,10 @@ export default function MapView({
   // ── Draw controller: initialize once map is ready ────────────────────────
   useEffect(() => {
     if (!leafletRef.current || drawCtrlRef.current) return
-    const ctrl = createDrawController(leafletRef.current, { style: { color: toolsStrokeColor } })
+    const ctrl = createDrawController(leafletRef.current, {
+      style: { color: toolsStrokeColor },
+      onFeatureClick: (id) => { try { ulRef.current?.selectFeature?.({ kind: 'drawn', id }) } catch {} },
+    })
     drawCtrlRef.current = ctrl
     const off = ctrl.onChange((list, active) => {
       setDrawnFeatures(list)
@@ -1064,20 +1103,46 @@ export default function MapView({
   }, [rxPoint])
 
   // ── Primary Coverage heatmap ───────────────────────────────────────────────
+  // Raster mode (`metadata.mode === 'raster'`): each cell is rendered as a true rectangle
+  // sized to the grid spacing, so adjacent cells touch and the heatmap actually tiles the area
+  // it covers — instead of looking like a sparse polka-dot grid. Radial mode keeps the dots.
   useEffect(() => {
     const map = leafletRef.current
     if (!map || !coverageGeoJSON) return
 
     if (coverageLayerRef.current) { coverageLayerRef.current.remove(); coverageLayerRef.current = null }
 
+    const isRaster = coverageGeoJSON.metadata?.mode === 'raster'
+    let dLat = 0, dLon = 0
+    if (isRaster) {
+      // derive the cell size from the actual point spread (works regardless of grid_size)
+      let lo = +Infinity, la = +Infinity, LO = -Infinity, LA = -Infinity
+      const N = coverageGeoJSON.metadata?.grid_size || Math.max(2, Math.round(Math.sqrt(coverageGeoJSON.features?.length || 1)))
+      for (const f of coverageGeoJSON.features || []) {
+        const c = f?.geometry?.coordinates
+        if (!c) continue
+        if (c[0] < lo) lo = c[0]; if (c[0] > LO) LO = c[0]
+        if (c[1] < la) la = c[1]; if (c[1] > LA) LA = c[1]
+      }
+      dLon = ((LO - lo) / Math.max(1, N - 1)) * 0.55     // ~half-cell each side → cells just barely touch
+      dLat = ((LA - la) / Math.max(1, N - 1)) * 0.55
+    }
+
     const layer = L.geoJSON(coverageGeoJSON, {
       pointToLayer: (feature, latlng) => {
         const dbm = feature.properties.signal_dbm
         if (!feature.properties.covered) return null
         const [r, g, b, a] = signalToColor(dbm, -120)
+        const fill = `rgba(${r},${g},${b},${a / 255})`
+        if (isRaster && dLat > 0 && dLon > 0) {
+          return L.rectangle(
+            [[latlng.lat - dLat, latlng.lng - dLon], [latlng.lat + dLat, latlng.lng + dLon]],
+            { color: fill, weight: 0, fillColor: fill, fillOpacity: 0.55, interactive: false }
+          )
+        }
         return L.circleMarker(latlng, {
           radius: 4,
-          fillColor: `rgba(${r},${g},${b},${a / 255})`,
+          fillColor: fill,
           fillOpacity: 0.8,
           stroke: false, interactive: false,
         })
@@ -1570,6 +1635,37 @@ export default function MapView({
     }
   }, [activeTab, tx.lat, tx.lon, rxPoint])
 
+  // ── Best-Site candidate markers ────────────────────────────────────────────
+  useEffect(() => {
+    const map = leafletRef.current
+    if (!map) return
+    if (bestSiteLayerRef.current) { try { bestSiteLayerRef.current.remove() } catch {} bestSiteLayerRef.current = null }
+    if (!bestSiteCandidates.length) return
+    const ranked = bestSiteResult?.sites || []
+    const near = (a, b) => Math.abs(a.lat - b.lat) < 1e-6 && Math.abs(a.lon - b.lon) < 1e-6
+    const winner = ranked[0]
+    const grp = L.layerGroup().addTo(map)
+    bestSiteCandidates.forEach((c, i) => {
+      const isWinner = winner && near(c, winner)
+      const rank = ranked.findIndex(s => near(c, s))
+      const color = isWinner ? '#06d6a0' : '#f59e0b'
+      L.circleMarker([c.lat, c.lon], {
+        radius: isWinner ? 9 : 7, fillColor: color, fillOpacity: 0.85,
+        color: '#0d1117', weight: 2,
+      }).addTo(grp).bindTooltip(
+        `<b style="color:${color}">${c.label || `Site ${i + 1}`}</b>${isWinner ? ' ★ best' : (rank >= 0 ? ` · rank ${rank + 1}` : '')}<br/>${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}` +
+          (rank >= 0 && ranked[rank]?.covered_area_km2 != null ? `<br/>${ranked[rank].covered_area_km2} km² covered` : ''),
+        { direction: 'top', permanent: false },
+      )
+      L.marker([c.lat, c.lon], {
+        icon: L.divIcon({ className: '', html: `<div style="font:700 10px sans-serif;color:#0d1117;text-align:center;width:14px">${i + 1}</div>`, iconSize: [14, 14], iconAnchor: [7, 7] }),
+        interactive: false,
+      }).addTo(grp)
+    })
+    bestSiteLayerRef.current = grp
+    return () => { try { grp.remove() } catch {} if (bestSiteLayerRef.current === grp) bestSiteLayerRef.current = null }
+  }, [bestSiteCandidates, bestSiteResult])
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={{ position: 'relative', height: '100%', width: '100%' }}>
@@ -1585,7 +1681,7 @@ export default function MapView({
               style={{ padding: '3px 8px', fontSize: 11 }}
               onClick={() => setTileStyle(s)}
             >
-              {s.charAt(0).toUpperCase() + s.slice(1)}
+              {TILE_LAYERS[s]?.label || (s.charAt(0).toUpperCase() + s.slice(1))}
             </button>
           ))}
           {/* Ruler tool — multiple rulers accumulate until cleared */}
@@ -2133,6 +2229,25 @@ export default function MapView({
               <line x1="19" y1="12" x2="22" y2="12"/>
             </svg>
             Add LoB Observer
+          </button>
+          <div style={{ height: 1, background: '#21262d', margin: '4px 0' }} />
+          <button
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              width: '100%', padding: '8px 14px',
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: '#06d6a0', fontSize: 13, textAlign: 'left',
+              transition: 'background 120ms',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = '#21262d'}
+            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+            onClick={() => {
+              onDownloadRegionAt?.(ctxMenu.lat, ctxMenu.lon)
+              setCtxMenu(null)
+            }}
+          >
+            <span style={{ flexShrink: 0, fontSize: 14, lineHeight: 1 }}>🗺️</span>
+            Download mapping data for this region…
           </button>
           <div style={{ height: 1, background: '#21262d', margin: '4px 0' }} />
           <div style={{

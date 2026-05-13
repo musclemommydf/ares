@@ -26,6 +26,7 @@ function dbmToRgb(dbm) {
 
 // Generate a beam cone as a set of line traces
 function buildBeamCone(tx, beamHeightMin, beamHeightMax, beamWidthDeg, azimuthDeg, tiltDeg) {
+  if (!tx || tx.lat == null || tx.lon == null) return []
   const numRays = 24
   const halfBw = (beamWidthDeg ?? 360) / 2
   const isOmni = !beamWidthDeg || beamWidthDeg >= 360
@@ -73,10 +74,22 @@ export default function ThreeDView({
   const beamWidthDeg = hpbw3
 
   const traces = useMemo(() => {
+    try {
+      return buildTraces()
+    } catch (e) {
+      // never let a malformed grid / geojson crash the whole app
+      // eslint-disable-next-line no-console
+      console.error('[ThreeDView] trace build failed', e)
+      try { return buildBeamCone(tx, beamHeightMin, beamHeightMax, beamWidthDeg, tx?.antenna?.azimuth_deg ?? 0, tx?.antenna?.tilt_deg ?? 0) }
+      catch { return [] }
+    }
+
+    function buildTraces() {
     const out = []
 
     // ── Terrain surface ────────────────────────────────────────────────────
-    if (terrainGrid?.lats && terrainGrid?.lons && terrainGrid?.elevations) {
+    const elevIs2D = Array.isArray(terrainGrid?.elevations) && Array.isArray(terrainGrid.elevations[0])
+    if (terrainGrid?.lats?.length && terrainGrid?.lons?.length && elevIs2D) {
       out.push({
         type: 'surface',
         x: terrainGrid.lons,
@@ -98,7 +111,7 @@ export default function ThreeDView({
     // ── Coverage scatter3d ─────────────────────────────────────────────────
     if (coverageGeoJSON?.features?.length) {
       const lons = [], lats = [], zs = [], colors = [], texts = []
-      const terrainElev = terrainGrid
+      const terrainElev = elevIs2D
         ? (lat, lon) => {
             if (!terrainGrid.lats.length) return 0
             const yi = Math.round((lat - terrainGrid.lats[0]) /
@@ -114,8 +127,11 @@ export default function ThreeDView({
 
       for (const f of coverageGeoJSON.features) {
         if (!f.properties?.covered) continue
-        const [lon, lat] = f.geometry.coordinates
-        const dbm = f.properties.signal_dbm
+        const c = f.geometry?.coordinates
+        if (!Array.isArray(c) || c.length < 2) continue
+        const [lon, lat] = c
+        const dbm = Number(f.properties.signal_dbm)
+        if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(dbm)) continue
         const baseElev = terrainElev(lat, lon)
         // Place coverage dot at terrain height + midpoint of beam height range
         const midH = (beamHeightMin + beamHeightMax) / 2
@@ -158,12 +174,13 @@ export default function ThreeDView({
     if (buildingGeoJSON?.features?.length) {
       for (const f of buildingGeoJSON.features) {
         if (f.geometry?.type !== 'Polygon') continue
-        const ring = f.geometry.coordinates[0]
+        const ring = f.geometry.coordinates?.[0]
+        if (!Array.isArray(ring) || ring.length < 3) continue
         const h = f.properties?.height_m ?? 10
         // Draw each wall as a surface using two elevation levels
         const xs = ring.map(c => c[0])
         const ys = ring.map(c => c[1])
-        const baseElev = terrainGrid
+        const baseElev = elevIs2D
           ? (terrainGrid.elevations[Math.floor(terrainGrid.elevations.length / 2)]?.[
               Math.floor(terrainGrid.lons.length / 2)] ?? 0)
           : 0
@@ -182,7 +199,7 @@ export default function ThreeDView({
 
     // ── TX marker ─────────────────────────────────────────────────────────
     if (tx?.lat != null) {
-      const txElev = terrainGrid
+      const txElev = elevIs2D
         ? (terrainGrid.elevations[Math.floor(terrainGrid.elevations.length / 2)]?.[
             Math.floor(terrainGrid.lons.length / 2)] ?? 0)
         : 0
@@ -220,6 +237,7 @@ export default function ThreeDView({
     out.push(...coneTraces)
 
     return out
+    }
   }, [terrainGrid, coverageGeoJSON, buildingGeoJSON, tx, minSignalDbm, beamHeightMin, beamHeightMax, beamWidthDeg])
 
   if (loading) {
@@ -266,6 +284,11 @@ export default function ThreeDView({
         {buildingGeoJSON?.features?.length && (
           <span>Buildings: {buildingGeoJSON.features.length}</span>
         )}
+        {terrainGrid?.flat
+          ? <span style={{ color: '#f0883e' }}>⚠ terrain data unavailable here — showing a flat plane (needs an SRTM source or an offline terrain pack)</span>
+          : terrainGrid?.lats?.length
+            ? <span style={{ color: '#444d56' }}>terrain: {terrainGrid.lats.length}×{terrainGrid.lons?.length || 0}{terrainGrid.resolution ? ` · ${terrainGrid.resolution.toUpperCase()}` : ''} around the emitter</span>
+            : null}
         <span style={{ marginLeft: 'auto', color: '#444d56' }}>
           Left-drag: rotate · Scroll: zoom · Right-drag: pan · Drag top edge of panel to resize
         </span>

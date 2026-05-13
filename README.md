@@ -1,4 +1,4 @@
-# Ares ATAK — v2.0 ("authoritative")
+# Ares — v2.0 ("authoritative")
 
 Terrain-based RF propagation & geolocation platform with GPU acceleration. Rivals
 and surpasses CloudRF, SPLAT!, RadioMobile, and Wireless InSite.
@@ -15,7 +15,7 @@ and surpasses CloudRF, SPLAT!, RadioMobile, and Wireless InSite.
 > (NSMA/Planet MSI, NEC-2); and **CoT over mutual-TLS** to a TAK Server. See
 > [`docs/AUTHORITATIVE_v2.md`](docs/AUTHORITATIVE_v2.md) and run `cd backend && python -m tests.test_authoritative`.
 
-> **This is the `Ares ATAK` branch** — a fork of `ares` that adds: (1) **ARES-ATAK**, an
+> **This is the `Ares` branch** — adds: (1) **ARES-ATAK**, an
 > open-source ATAK-CIV plugin matching the CloudRF SOOTHSAYER plugin and adding Ares
 > DF/geolocation + propagation extras; (2) a **fully offline-capable hybrid server**
 > (worldwide 30 m terrain / OSM base maps / building footprints / AO imagery packs, with

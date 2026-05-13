@@ -1,12 +1,12 @@
-# Ares ATAK — Build Plan
+# Ares — Build Plan
 
-> **v2.0 note.** This document describes the v1.x build. The `ares-authoritative` branch (v2.0)
+> **v2.0 note.** This document describes the v1.x build. The `ares` v2.0 codebase
 > replaces the *indicative* propagation/geolocation implementations with reference-grade ones —
 > ITS Longley-Rice ITM, ML DF + covariance ellipse + GDOP + EKF, TDOA/FDOA, real SGP4, ITU-R
 > P.533-style HF, per-pixel WorldCover clutter, measured-pattern import, CoT-over-TLS. See
 > [`docs/AUTHORITATIVE_v2.md`](AUTHORITATIVE_v2.md).
 
-> **What this branch is.** `Ares ATAK` is a fork of the `ares` RF-propagation/geolocation platform whose purpose is to ship four things on top of the current product:
+> **What this is.** `Ares` is an RF-propagation/geolocation platform whose purpose is to ship four things on top of the current product:
 >
 > 1. **ARES-ATAK** — an open-source ATAK-CIV plugin that matches the CloudRF *SOOTHSAYER* ATAK plugin feature-for-feature against an **Ares** server, and adds Ares-exclusive capabilities (terrain-aware DF/geolocation, MANET, interference/EMCON, HF/space-weather, ray-trace).
 > 2. **Offline-capable hybrid server** — Ares runs fully air-gapped from pre-staged data packs (worldwide 30 m terrain, OSM base maps + building footprints, AO imagery packs), **and** when internet is available behaves exactly as today: auto-fetching the highest-fidelity terrain / imagery / clutter it can and caching it for the next offline session.
@@ -30,7 +30,7 @@
 | Mobile (Expo/React Native) | Stays on the flat `react-native-maps` view for now | Optional later: embed the Cesium web build in a WebView. Not in scope for v1. |
 | Offline data store | New `data/packs/` layout (terrain / imagery / osm / buildings / clutter), each pack versioned with a manifest | See §A.2. |
 | Server auth | Bearer-token auth + login endpoint (currently the API is unauthenticated) | Required for any networked/field deployment; needed by the plugin. See §A.1. |
-| Repo hygiene | The eventual `atak-plugin/` subdirectory and any Gradle paths must be **space-free** | Folder name `Ares ATAK` has a space; Gradle (esp. on Windows) dislikes spaces in paths. Keep build paths clean regardless of the top folder name. |
+| Repo hygiene | The `atak-plugin/` subdirectory and any Gradle paths must be **space-free** | Gradle (esp. on Windows) dislikes spaces in paths. Keep build paths clean regardless of the top folder name. |
 
 ---
 
@@ -219,7 +219,7 @@ Workstreams A, B, C run in parallel; **A leads slightly** because it underpins C
 - `backend/app/api/auth_routes.py` — `POST /api/v1/auth/login`, `GET /api/v1/auth/me`.
 - `backend/app/core/packs.py` — `data/packs/{terrain,osm,buildings,clutter,imagery}/<id>/manifest.json` layout, `PackManifest` schema, list/get/register/delete; `start_download` records a job and returns `status: not_implemented` (data-fetch pipeline lands P1–P3).
 - `backend/app/api/system_routes.py` — `GET /api/v1/server/info` (version, GPU probe, pack counts, online/offline probe, disk), `GET/DELETE /api/v1/packs[...]`, `POST /api/v1/packs/download`, `GET /api/v1/packs/jobs[...]`.
-- `backend/app/config.py` — `auth_enabled`, `auth_secret` (persisted to `data/.auth_secret`), `network_policy`, `PACKS_DIR`/`PACK_LAYERS`, app renamed to "Ares ATAK".
+- `backend/app/config.py` — `auth_enabled`, `auth_secret` (persisted to `data/.auth_secret`), `network_policy`, `PACKS_DIR`/`PACK_LAYERS`, app name "Ares".
 - `backend/app/main.py` — new routers mounted; `ensure_default_user()` on startup; warns when auth is disabled.
 
 **Workstream B — Cesium globe:**

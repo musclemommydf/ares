@@ -1,5 +1,5 @@
 """
-Ares ATAK — offline data packs (Workstream A.2).
+Ares — offline data packs (Workstream A.2).
 
 A *pack* is a directory under ``data/packs/<layer>/<pack_id>/`` containing data
 files plus a ``manifest.json``. Layers: terrain, osm, buildings, clutter, imagery.

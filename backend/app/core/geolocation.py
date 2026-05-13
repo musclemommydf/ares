@@ -1,5 +1,5 @@
 """
-Ares ATAK — passive emitter geolocation from Lines of Bearing (Workstream C / B).
+Ares — passive emitter geolocation from Lines of Bearing (Workstream C / B).
 
 The single Cut/Fix solver behind ``POST /api/v1/geolocate/fix`` (web app, mobile
 app, ATAK plugin) and the live SDR/DF pipeline.

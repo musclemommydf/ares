@@ -1,5 +1,5 @@
 """
-Ares ATAK — Configuration
+Ares — Configuration
 """
 import os
 import secrets
@@ -54,7 +54,7 @@ def _resolve_auth_enabled() -> bool:
 
 
 class Settings(BaseSettings):
-    app_name: str = "Ares ATAK"
+    app_name: str = "Ares"
     app_version: str = "2.0.0"
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"
     host: str = os.getenv("HOST", "0.0.0.0")

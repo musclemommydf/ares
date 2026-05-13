@@ -10,7 +10,7 @@ const card = { background: '#0d1117', border: '1px solid #21262d', borderRadius:
 const th = { textAlign: 'left', fontSize: 10, color: '#8b949e', fontWeight: 600, padding: '4px 8px', whiteSpace: 'nowrap' }
 const td = { fontSize: 11, color: '#c9d1d9', padding: '4px 8px', borderTop: '1px solid #161b22', whiteSpace: 'nowrap' }
 
-export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLocate }) {
+export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLocate, embedded = false }) {
   const [feedTypes, setFeedTypes] = useState([])
   const [deviceId, setDeviceId] = useState('')
   const [startMHz, setStartMHz] = useState('5645')
@@ -36,12 +36,22 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
     catch (e) { setRidErr('Parse failed: ' + (e?.response?.data?.detail || e?.message || e)) }
   }
   const ridSum = ridResult?.parsed?.summary || ridResult?.parsed
+  const [frameTick, setFrameTick] = useState(0)        // cache-buster for the decoded-video <img>
+  const frameRef = useRef(null)
 
   useEffect(() => {
     getUasFeedTypes().then(d => setFeedTypes(d.feed_types || [])).catch(() => {})
     getUasSessions().then(d => { const s = (d.sessions || [])[0]; if (s) setSession(s) }).catch(() => {})
-    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+    return () => { if (pollRef.current) clearInterval(pollRef.current); if (frameRef.current) clearInterval(frameRef.current) }
   }, [])
+
+  // refresh the decoded raster-frame image while an analog-video session is live
+  useEffect(() => {
+    if (frameRef.current) { clearInterval(frameRef.current); frameRef.current = null }
+    if (!session?.video_url) return
+    frameRef.current = setInterval(() => setFrameTick(t => t + 1), 900)
+    return () => { if (frameRef.current) clearInterval(frameRef.current) }
+  }, [session?.video_url])
 
   // poll the decoded MISB metadata while a session with a metadata_url is live
   useEffect(() => {
@@ -92,13 +102,12 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
   }
   const klv = metadata?.klv
 
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 10000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflowY: 'auto' }}>
-      <div onClick={e => e.stopPropagation()} style={{ ...card, width: 'min(960px, 100%)', background: '#161b22', padding: 16 }}>
+  const body = (
+    <>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <Radio size={16} color="#22d3ee" />
-          <b style={{ fontSize: 14, color: '#e6edf3' }}>UAS Video — downlink scanner · decoder · exploitation (PED)</b>
-          <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '2px 6px' }} onClick={onClose}><X size={14} /></button>
+          <b style={{ fontSize: 14, color: '#e6edf3' }}>UAS Video — downlink scanner · decoder · exploitation</b>
+          {!embedded && <button className="btn btn-ghost" style={{ marginLeft: 'auto', padding: '2px 6px' }} onClick={onClose}><X size={14} /></button>}
         </div>
 
         {/* scan controls */}
@@ -162,13 +171,26 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
             {session.pipeline?.length > 0 && <div style={{ fontSize: 10, color: '#6e7681', marginBottom: 6 }}>pipeline: {session.pipeline.join(' → ')}</div>}
             {session.auto_detected && <div style={{ fontSize: 10, color: '#3fb950', marginBottom: 6 }}>auto-detected{session.auto_detected.from ? ` (${session.auto_detected.from})` : ''} — {Math.round((session.auto_detected.confidence || 0) * 100)}% confident{session.auto_detected.alternatives?.length ? `; alt: ${session.auto_detected.alternatives.map(a => a.feed_type).join(', ')}` : ''}</div>}
 
-            {/* video pane (real frames once a demod chain + capture backend are present; otherwise the live MISB readout) */}
-            {session.status === 'started' ? (
-              <video controls autoPlay muted playsInline style={{ width: '100%', maxHeight: 300, background: '#000', borderRadius: 6, marginBottom: 8 }} src={`/api/v1/uas/sessions/${session.id}/stream`} />
+            {/* decoded video / demod readout */}
+            {session.video_url ? (
+              // analog feed: the native FM/composite demod recovered raster frame(s) — re-fetch periodically
+              <img alt="decoded video frame" src={`${session.video_url}?i=${frameTick}`}
+                   style={{ width: '100%', maxHeight: 300, objectFit: 'contain', background: '#000', borderRadius: 6, marginBottom: 8, imageRendering: 'pixelated' }}
+                   onError={e => { e.currentTarget.style.display = 'none' }} />
             ) : (
-              <div style={{ ...card, background: '#000', borderRadius: 6, marginBottom: 8, padding: 16, minHeight: 120, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center' }}>
-                <div style={{ fontSize: 12, color: '#8b949e' }}>{session.transport === 'proprietary' ? 'Proprietary / encrypted feed — characterise & geolocate only (no decryptable video).' : 'Awaiting a demod chain + capture backend — see the note below; the player is wired to the stream URL.'}</div>
-                {klv && <div style={{ fontSize: 11, color: '#22d3ee', marginTop: 8 }}>live MISB: {klv.platform_call_sign || 'UAS'} @ {klv.sensor_lat_deg?.toFixed(4)}, {klv.sensor_lon_deg?.toFixed(4)} · {klv.sensor_true_alt_m?.toFixed(0)} m · slant {klv.slant_range_m?.toFixed(0)} m{klv._synthetic ? ' (synthetic)' : ''}</div>}
+              <div style={{ ...card, background: '#000', borderRadius: 6, marginBottom: 8, padding: 14, minHeight: 110, display: 'flex', flexDirection: 'column', justifyContent: 'center', textAlign: 'center', gap: 6 }}>
+                {session.transport === 'proprietary'
+                  ? <div style={{ fontSize: 12, color: '#8b949e' }}>Proprietary / encrypted feed — characterise &amp; geolocate only (no decryptable video).</div>
+                  : session.demod?.ok
+                    ? <div style={{ fontSize: 11, color: '#22d3ee' }}>
+                        Native {session.demod.kind} demod{session.demod.fft_len ? ` · ${session.demod.fft_len}/${session.demod.cp_len}` : ''}{session.demod.modulation ? ` · ${session.demod.modulation}` : ''}
+                        {session.demod.n_symbols != null ? ` · ${session.demod.n_symbols.toLocaleString()} sym` : ''}
+                        {session.demod.evm_pct != null ? ` · EVM ${session.demod.evm_pct}%` : ''}
+                        {session.demod.cfo_hz_est != null ? ` · CFO ${session.demod.cfo_hz_est} Hz` : ''}
+                        {session.demod.ts?.ts_sync ? ` · TS sync (${session.demod.ts.klv_units} KLV)` : ' · PHY symbols recovered (no TS sync — inner FEC stage / cleaner link needed)'}
+                      </div>
+                    : <div style={{ fontSize: 12, color: '#8b949e' }}>{session.demod?.error || session.demod?.reason || 'Capture + native software demod running…'}</div>}
+                {klv && <div style={{ fontSize: 11, color: '#22d3ee' }}>live MISB: {klv.platform_call_sign || 'UAS'} @ {klv.sensor_lat_deg?.toFixed(4)}, {klv.sensor_lon_deg?.toFixed(4)} · {klv.sensor_true_alt_m?.toFixed(0)} m · slant {klv.slant_range_m?.toFixed(0)} m{klv._synthetic ? ' (synthetic)' : ''}</div>}
               </div>
             )}
 
@@ -185,7 +207,7 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {klv && <button className="btn btn-ghost" style={{ fontSize: 10, padding: '3px 8px', gap: 4 }} onClick={() => onLocate?.(klv.sensor_lat_deg, klv.sensor_lon_deg)}><Crosshair size={12} /> Fly to platform</button>}
               {(metadata?.geojson || exploit?.geojson) && <button className="btn btn-ghost" style={{ fontSize: 10, padding: '3px 8px', gap: 4 }} onClick={addToMap}><Layers size={12} /> Add platform/footprint to map</button>}
-              <button className="btn btn-primary" style={{ fontSize: 10, padding: '3px 8px', gap: 4 }} onClick={runExploit}><MapPin size={12} /> Exploit (PED — demux TS / KLV track / modulation ID)</button>
+              <button className="btn btn-primary" style={{ fontSize: 10, padding: '3px 8px', gap: 4 }} onClick={runExploit}><MapPin size={12} /> Exploit — demux TS / KLV track / modulation ID</button>
             </div>
 
             {exploit && !exploit.error && (
@@ -253,9 +275,17 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
         </div>
 
         <div style={{ fontSize: 10, color: '#6e7681', marginTop: 8 }}>
-          Live video/IQ needs an SDR backend (SoapySDR with the SignalHound / Sidekiq / UHD module, or a wired IQ provider) and an external demod chain (leandvb / a DVB-T(2) receiver / SDRangel; ffmpeg or TSDuck for the TS step). Without them, Ares still scans, classifies, parses STANAG-4609 KLV, builds the footprint and pushes it to ATAK — with a synthetic feed driving the offline demo.
+          Ares demodulates the downlink in-process (its own software demod — FM/VSB composite video, OFDM/COFDM, single-carrier PSK/QAM → MPEG-TS demux + STANAG-4609 KLV); no SoapySDR / leandvb / DVB-T(2) receiver / SDRangel / ffmpeg / TSDuck is required. A wired IQ provider feeds it real baseband; otherwise a synthetic snapshot drives the offline demo. PHY only — the broadcast inner FEC (DVB Viterbi+RS / DVB-S2 LDPC+BCH) is the next stage; H.264/H.265 elementary-stream decode of a recovered TS still benefits from ffmpeg when present.
         </div>
-      </div>
+    </>
+  )
+
+  if (embedded) {
+    return <div style={{ height: '100%', overflowY: 'auto', padding: '12px 14px' }}>{body}</div>
+  }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 10000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflowY: 'auto' }}>
+      <div onClick={e => e.stopPropagation()} style={{ ...card, width: 'min(960px, 100%)', background: '#161b22', padding: 16 }}>{body}</div>
     </div>
   )
 }

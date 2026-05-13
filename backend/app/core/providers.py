@@ -1,5 +1,5 @@
 """
-Ares ATAK — provider chain (Workstream A.3): *local pack → online fetch → cache*.
+Ares — provider chain (Workstream A.3): *local pack → online fetch → cache*.
 
 When the box is offline, data comes only from installed packs. When it's online
 (and ``network_policy`` allows), a missing datum is fetched from the best remote

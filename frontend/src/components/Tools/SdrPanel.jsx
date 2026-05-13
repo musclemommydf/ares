@@ -18,8 +18,17 @@ import { X, Plus, RefreshCw, Trash2, Wifi, WifiOff, AlertCircle, Activity, Radio
 import {
   listSdrDevices, createSdrDevice, updateSdrDevice, deleteSdrDevice, testSdrDevice,
   getSdrState, createSdrSocket, getDfAccuracyEstimate, getGpsFix, setGpsFix,
+  getGpsSource, setGpsSource, getDfIqBackend, solveAoaLive,
   addSdrPeer, removeSdrPeer, getSdrPeers,
 } from '../../api/client'
+
+const GPS_SOURCES = [
+  { id: 'manual', label: 'Manual (type a position)' },
+  { id: 'browser', label: 'This computer (browser geolocation)' },
+  { id: 'gpsd', label: 'USB GPS via gpsd (localhost:2947)' },
+  { id: 'serial', label: 'USB GPS — raw serial NMEA (/dev/ttyUSB0…)' },
+  { id: 'sdr', label: "SDR's GPSDO / GNSS sensors" },
+]
 
 const DEVICE_TYPES = [
   { id: 'krakensdr',     label: 'KrakenSDR (krakensdr_doa)',          defaultPort: 8080 },
@@ -36,6 +45,13 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
   const [fixes, setFixes] = useState([])
   const [gps, setGps] = useState(null)
   const [gpsInput, setGpsInput] = useState({ lat: '', lon: '' })
+  const [gpsSrc, setGpsSrc] = useState(null)              // backend GPS-source status
+  const [gpsSrcForm, setGpsSrcForm] = useState({ kind: 'manual', host: '127.0.0.1', port: 2947, path: '/dev/ttyUSB0', baud: 9600, device_args: '' })
+  const [gpsWatchId, setGpsWatchId] = useState(null)      // navigator.geolocation.watchPosition id (browser source)
+  const [iqBackend, setIqBackend] = useState(null)        // /df/iq_backend — native IQ capture status + SDR(s) seen by SoapySDR
+  const [aoaForm, setAoaForm] = useState({ device_id: '', frequency_hz: '433920000', method: 'music', n_snapshots: 4096, array_type: 'uca', n: 5, spacing_wavelengths: 0.4 })
+  const [aoaResult, setAoaResult] = useState(null)
+  const [aoaBusy, setAoaBusy] = useState(false)
   const [mesh, setMesh] = useState(null)
   const [peerInput, setPeerInput] = useState('')
   const [wsState, setWsState] = useState('connecting')
@@ -66,6 +82,11 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
         setGps(s.gps || null); setMesh(s.mesh || null)
         publishFeatures(s.fixes || [], onSdrFeatures)
       } catch (e) { setErrText(String(e?.message || e)) }
+      try {
+        const g = await getGpsSource()
+        if (!cancelled) { setGpsSrc(g); if (g?.kind) setGpsSrcForm(f => ({ ...f, kind: g.kind, ...(g.config || {}) })) }
+      } catch { /* GPS-source endpoint optional */ }
+      try { const b = await getDfIqBackend(); if (!cancelled) setIqBackend(b) } catch { /* IQ-backend endpoint optional */ }
     })()
     const sock = createSdrSocket(
       (m) => {
@@ -121,6 +142,65 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
     catch (e) { setErrText(String(e?.response?.data?.detail || e?.message || e)) }
   }
   const useMapCenterAsGps = () => { if (mapCenter) setGpsInput({ lat: String(mapCenter.lat), lon: String(mapCenter.lon) }) }
+
+  // ── GPS source picker (this computer / USB GPS via gpsd or serial NMEA / an SDR's GPSDO) ──
+  const pushBrowserFix = (pos) => {
+    const c = pos?.coords; if (!c) return
+    setGpsFix({ lat: c.latitude, lon: c.longitude, alt_m: c.altitude || 0,
+                heading_deg: (c.heading != null && !isNaN(c.heading)) ? c.heading : undefined,
+                speed_mps: (c.speed != null && !isNaN(c.speed)) ? c.speed : undefined, source: 'browser' })
+      .then(r => { setGps(r.fix); setErrText(`✓ device GPS: ${c.latitude.toFixed(5)}, ${c.longitude.toFixed(5)} (±${Math.round(c.accuracy || 0)} m)`) })
+      .catch(e => setErrText(String(e?.response?.data?.detail || e?.message || e)))
+  }
+  const stopBrowserWatch = () => { if (gpsWatchId != null && navigator.geolocation) { navigator.geolocation.clearWatch(gpsWatchId); setGpsWatchId(null) } }
+  const useThisDevice = (track) => {
+    if (!navigator.geolocation) { setErrText('this browser has no Geolocation API'); return }
+    stopBrowserWatch()
+    if (track) {
+      const id = navigator.geolocation.watchPosition(pushBrowserFix, e => setErrText('geolocation: ' + e.message),
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 })
+      setGpsWatchId(id)
+      setGpsSrc(s => ({ ...(s || {}), kind: 'browser', running: true }))
+    } else {
+      navigator.geolocation.getCurrentPosition(pushBrowserFix, e => setErrText('geolocation: ' + e.message),
+        { enableHighAccuracy: true, timeout: 15000 })
+    }
+  }
+  const applyGpsSource = async () => {
+    const f = gpsSrcForm
+    stopBrowserWatch()
+    if (f.kind === 'browser') { useThisDevice(true); return }
+    try {
+      const r = await setGpsSource({ kind: f.kind, host: f.host, port: Number(f.port) || 2947,
+        path: f.path, baud: Number(f.baud) || 9600, device_args: f.device_args })
+      setGpsSrc(r)
+      setErrText(r.kind === 'off' || r.kind === 'manual'
+        ? `GPS source: ${r.kind}` : `GPS source started: ${r.kind}${r.last_error ? ` — ${r.last_error}` : ''}`)
+    } catch (e) { setErrText(String(e?.response?.data?.detail || e?.message || e)) }
+  }
+
+  // ── Native AoA from a connected SDR (or the synthetic coherent fallback) ──
+  const runAoaLive = async () => {
+    const f = aoaForm
+    const freq = Number(f.frequency_hz)
+    if (!freq || freq <= 0) { setErrText('AoA: enter a frequency in Hz'); return }
+    setAoaBusy(true); setAoaResult(null)
+    try {
+      const array = f.array_type === 'ula'
+        ? { type: 'ula', n: Number(f.n) || 4, spacing_m: (Number(f.spacing_wavelengths) || 0.4) * (299_792_458 / freq) }
+        : { type: 'uca', n: Number(f.n) || 5, radius_m: ((Number(f.spacing_wavelengths) || 0.4) * (299_792_458 / freq)) / (2 * Math.sin(Math.PI / (Number(f.n) || 5))) }
+      const r = await solveAoaLive({
+        array, frequency_hz: freq, device_id: f.device_id || undefined,
+        method: f.method, n_snapshots: Number(f.n_snapshots) || 4096,
+        sample_rate_hz: 2_400_000,
+      })
+      setAoaResult(r)
+    } catch (e) {
+      setErrText('AoA live failed: ' + (e?.response?.data?.detail || e?.message || e))
+    } finally { setAoaBusy(false) }
+  }
+  const refreshIqBackend = async () => { try { setIqBackend(await getDfIqBackend()) } catch {} }
+
   const addPeer = async () => {
     const u = peerInput.trim(); if (!u) return
     try { const r = await addSdrPeer(u); setPeerInput(''); const p = await getSdrPeers(); setMesh({ node_id: p.node_id, node_label: p.node_label, peers: p.status || [] }); setErrText(`✓ peer added: ${r.added}`) }
@@ -159,7 +239,7 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
   }, [lobs])
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000,
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 2000,
                   display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 20px', overflowY: 'auto' }}>
       <div style={{ background: '#0d1117', border: '1px solid #30363d', borderRadius: 8, width: 720, maxWidth: '100%',
                     color: '#e6edf3', boxShadow: '0 20px 60px rgba(0,0,0,0.7)' }}>
@@ -265,6 +345,67 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
             )}
           </Section>
 
+          <Section title="Native IQ capture / live DF">
+            <div style={{ fontSize: 12, color: '#c9d1d9', marginBottom: 6 }}>
+              Backend: <strong>{iqBackend?.backend || '…'}</strong>
+              {iqBackend?.available ? <span style={{ color: '#3fb950' }}> · SoapySDR present</span>
+                : <span style={{ color: '#f0883e' }}> · SoapySDR not installed — synthetic IQ only (install <code>soapysdr</code> + the device module: <code>SoapySDR_SignalHound</code> / <code>SoapyUHD</code> / <code>SoapySidekiq</code> / <code>SoapyRTLSDR</code>)</span>}
+              {iqBackend?.devices?.length > 0 && <> · {iqBackend.devices.length} SDR(s) seen</>}
+              <button style={{ ...btn, marginLeft: 6, fontSize: 10, padding: '1px 6px' }} onClick={refreshIqBackend}>↻</button>
+            </div>
+            {iqBackend?.devices?.length > 0 && (
+              <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 4, padding: 6, marginBottom: 6, maxHeight: 110, overflowY: 'auto' }}>
+                {iqBackend.devices.map(d => (
+                  <div key={d.id || d.args} style={{ display: 'flex', gap: 8, fontSize: 11, padding: '2px 4px', borderBottom: '1px solid #161b22' }}>
+                    <span style={{ color: '#8b949e', minWidth: 90 }}>{d.kind}</span>
+                    <span style={{ color: '#c9d1d9', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.args}>{d.label || d.id}</span>
+                    <span style={{ color: '#6e7681' }}>{d.channels}ch{d.coherent_rx ? ' coherent' : ''}</span>
+                    <button style={{ ...btn, fontSize: 10, padding: '1px 6px' }} onClick={() => setAoaForm(f => ({ ...f, device_id: d.id || '' }))}>use for AoA</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: '#8b949e' }}>Solve AoA live:</span>
+              <input style={{ ...inputStyle, width: 100 }} placeholder="freq (Hz)" value={aoaForm.frequency_hz}
+                     onChange={e => setAoaForm(f => ({ ...f, frequency_hz: e.target.value }))} />
+              <select style={{ ...inputStyle, fontSize: 11 }} value={aoaForm.method}
+                      onChange={e => setAoaForm(f => ({ ...f, method: e.target.value }))}>
+                <option value="music">MUSIC</option><option value="capon">Capon / MVDR</option><option value="bartlett">Bartlett</option>
+              </select>
+              <select style={{ ...inputStyle, fontSize: 11 }} value={aoaForm.array_type}
+                      onChange={e => setAoaForm(f => ({ ...f, array_type: e.target.value }))}>
+                <option value="uca">UCA</option><option value="ula">ULA</option>
+              </select>
+              <input style={{ ...inputStyle, width: 40 }} title="elements" value={aoaForm.n}
+                     onChange={e => setAoaForm(f => ({ ...f, n: e.target.value }))} />
+              <input style={{ ...inputStyle, width: 60 }} title="spacing / radius (λ)" value={aoaForm.spacing_wavelengths}
+                     onChange={e => setAoaForm(f => ({ ...f, spacing_wavelengths: e.target.value }))} />
+              <input style={{ ...inputStyle, width: 70 }} title="snapshots" value={aoaForm.n_snapshots}
+                     onChange={e => setAoaForm(f => ({ ...f, n_snapshots: e.target.value }))} />
+              <input style={{ ...inputStyle, width: 140 }} placeholder="device id (blank = first)" value={aoaForm.device_id}
+                     onChange={e => setAoaForm(f => ({ ...f, device_id: e.target.value }))} />
+              <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} disabled={aoaBusy} onClick={runAoaLive}>
+                {aoaBusy ? 'Solving…' : 'Solve AoA Live'}
+              </button>
+            </div>
+            {aoaResult && (
+              <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 4, padding: 6, fontSize: 11 }}>
+                <div>
+                  <strong style={{ color: '#06d6a0' }}>{aoaResult.azimuth_deg != null ? `${aoaResult.azimuth_deg.toFixed(1)}°` : '—'}</strong>
+                  {aoaResult.azimuth_sigma_deg != null && <span style={{ color: '#6e7681' }}> ±{aoaResult.azimuth_sigma_deg.toFixed(2)}°</span>}
+                  {aoaResult.elevation_deg != null && <span> · el {aoaResult.elevation_deg.toFixed(1)}°</span>}
+                  {aoaResult.snr_db != null && <span> · SNR {aoaResult.snr_db.toFixed(1)} dB</span>}
+                </div>
+                <div style={{ color: '#6e7681', fontSize: 10 }}>
+                  {aoaResult.method?.toUpperCase()} · {aoaResult.snapshots} snapshots × {aoaResult.channels} ch · {aoaResult.iq_source}
+                  {aoaResult.synthetic ? ' (synthetic IQ — install SoapySDR + the device module to go live)' : ''}
+                  {aoaResult.ambiguities?.length > 0 && ` · alt: ${aoaResult.ambiguities.map(a => `${a.az_deg?.toFixed?.(0)}°`).join(', ')}`}
+                </div>
+              </div>
+            )}
+          </Section>
+
           <Section title="Live DF picture">
             <div style={{ fontSize: 12, color: '#c9d1d9' }}>
               {lobs.length} LoB(s) buffered · {fixes.length} fix update(s) · LoBs and fixes appear on the 2D / 3D map automatically.
@@ -278,10 +419,54 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
 
           <Section title="GPS — operator location">
             <div style={{ fontSize: 12, color: '#c9d1d9' }}>
-              {gps ? <>Current fix: <strong>{gps.lat.toFixed(5)}, {gps.lon.toFixed(5)}</strong> ({gps.source}{gps.heading_deg != null ? `, heading ${Math.round(gps.heading_deg)}°` : ''}) — shown on the map; used as the observer position for LoBs.</>
-                   : <>No GPS fix set. Enter one below (or POST to <code>/api/v1/sdr/gps</code> from <code>gpsd</code>/an app). LoBs from your SDR plot from this location automatically.</>}
+              {gps ? <>Current fix: <strong>{gps.lat.toFixed(5)}, {gps.lon.toFixed(5)}</strong> ({gps.source}{gps.heading_deg != null ? `, heading ${Math.round(gps.heading_deg)}°` : ''}{gps.speed_mps != null ? `, ${(gps.speed_mps * 1.94384).toFixed(1)} kt` : ''}) — shown on the map; the observer position for LoBs and the SDR-device position.</>
+                   : <>No GPS fix yet. Pick a source below — this computer, a USB GPS (gpsd or serial NMEA), an SDR's GPSDO — or type one.</>}
             </div>
+
+            {/* GPS source picker */}
+            <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 4, padding: 8, marginTop: 6 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11, color: '#8b949e' }}>Live source:</span>
+                <select style={{ ...inputStyle, fontSize: 11 }} value={gpsSrcForm.kind}
+                        onChange={e => setGpsSrcForm(f => ({ ...f, kind: e.target.value }))}>
+                  {GPS_SOURCES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                </select>
+                {gpsSrcForm.kind === 'browser' && (
+                  <>
+                    <button style={btn} onClick={() => useThisDevice(false)}>📍 Use this device once</button>
+                    {gpsWatchId == null
+                      ? <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} onClick={() => useThisDevice(true)}>▶ Track this device</button>
+                      : <button style={btn} onClick={stopBrowserWatch}>⏹ Stop tracking</button>}
+                  </>
+                )}
+                {gpsSrcForm.kind === 'gpsd' && <>
+                  <input style={{ ...inputStyle, width: 120, fontSize: 11 }} value={gpsSrcForm.host} onChange={e => setGpsSrcForm(f => ({ ...f, host: e.target.value }))} placeholder="gpsd host" />
+                  <input style={{ ...inputStyle, width: 64, fontSize: 11 }} value={gpsSrcForm.port} onChange={e => setGpsSrcForm(f => ({ ...f, port: e.target.value }))} placeholder="2947" />
+                </>}
+                {gpsSrcForm.kind === 'serial' && <>
+                  <input style={{ ...inputStyle, width: 160, fontSize: 11 }} value={gpsSrcForm.path} onChange={e => setGpsSrcForm(f => ({ ...f, path: e.target.value }))} placeholder="/dev/ttyUSB0" />
+                  <input style={{ ...inputStyle, width: 70, fontSize: 11 }} value={gpsSrcForm.baud} onChange={e => setGpsSrcForm(f => ({ ...f, baud: e.target.value }))} placeholder="9600" />
+                </>}
+                {gpsSrcForm.kind === 'sdr' && <input style={{ ...inputStyle, width: 200, fontSize: 11 }} value={gpsSrcForm.device_args} onChange={e => setGpsSrcForm(f => ({ ...f, device_args: e.target.value }))} placeholder="SoapySDR args, blank = first device" />}
+                {gpsSrcForm.kind !== 'browser' && <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} onClick={applyGpsSource}>{gpsSrcForm.kind === 'off' || gpsSrcForm.kind === 'manual' ? 'Apply' : 'Start'}</button>}
+                {(gpsSrc?.running || gpsSrc?.kind === 'browser') && gpsSrcForm.kind !== 'browser' && <button style={btn} onClick={() => { setGpsSrcForm(f => ({ ...f, kind: 'off' })); setGpsSource({ kind: 'off' }).then(setGpsSrc).catch(() => {}) }}>Stop</button>}
+              </div>
+              {gpsSrc && (gpsSrc.running || gpsSrc.last_error || gpsSrc.kind !== 'off') && (
+                <div style={{ fontSize: 10, color: gpsSrc.last_error ? '#f0883e' : '#6e7681', marginTop: 4 }}>
+                  source: <strong>{gpsSrc.kind}</strong>{gpsSrc.running ? ' · running' : ''}{gpsSrc.last_error ? ` · ${gpsSrc.last_error}` : ''}
+                  {gpsSrc.available && (gpsSrc.available.serial === false || gpsSrc.available.sdr === false) && (
+                    <span> · {gpsSrc.available.serial === false ? 'serial needs pyserial' : ''}{gpsSrc.available.serial === false && gpsSrc.available.sdr === false ? '; ' : ''}{gpsSrc.available.sdr === false ? 'SDR-GPSDO needs SoapySDR' : ''}</span>
+                  )}
+                </div>
+              )}
+              <div style={{ fontSize: 10, color: '#484f58', marginTop: 4 }}>
+                gpsd: install <code>gpsd gpsd-clients</code>, plug the dongle in (works with any gpsd-supported receiver). Serial NMEA reads <code>/dev/ttyUSB*</code>/<code>/dev/ttyACM*</code> directly. SDR-GPSDO reads <code>gps_*</code> sensors (USRP/Sidekiq/SignalHound with a GNSS module). Nothing runs automatically.
+              </div>
+            </div>
+
+            {/* manual entry */}
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: '#8b949e' }}>Or type a position:</span>
               <input style={{ ...inputStyle, width: 100 }} placeholder="lat" value={gpsInput.lat} onChange={e => setGpsInput(g => ({ ...g, lat: e.target.value }))} />
               <input style={{ ...inputStyle, width: 100 }} placeholder="lon" value={gpsInput.lon} onChange={e => setGpsInput(g => ({ ...g, lon: e.target.value }))} />
               <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} onClick={sendGps}><Save size={12} /> Set GPS</button>

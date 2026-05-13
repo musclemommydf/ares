@@ -146,9 +146,13 @@ def _synthetic_iq(device: Optional[dict], center_hz: float, rate_hz: float, n_sa
         return x / np.float32(np.sqrt(np.mean(np.abs(x) ** 2)) + 1e-9) + noise
     if has("dvbs", "qam", "cdl"):
         sps = 4
-        syms = np.exp(1j * (rng.integers(0, 4, n // sps + 2) * (np.pi / 2) + np.pi / 4)).astype(np.complex64)
-        up = np.zeros((n // sps + 2) * sps, np.complex64); up[::sps] = syms
-        h = np.hanning(2 * sps + 1).astype(np.complex64)
+        syms = np.exp(1j * (rng.integers(0, 4, n // sps + 16) * (np.pi / 2) + np.pi / 4)).astype(np.complex64)
+        up = np.zeros((n // sps + 16) * sps, np.complex64); up[::sps] = syms
+        try:  # a proper RRC transmit pulse (β=0.35) — matches the native demod's matched filter
+            from . import native_demod as _nd
+            h = _nd._rrc_taps(0.35, sps, 8).astype(np.complex64)
+        except Exception:
+            h = np.hanning(2 * sps + 1).astype(np.complex64)
         x = np.convolve(up, h, "same")[:n].astype(np.complex64)
         return x / np.float32(np.sqrt(np.mean(np.abs(x) ** 2)) + 1e-9) + noise
     return noise * np.float32(2.0)
@@ -734,8 +738,12 @@ def auto_detect_feed(device: Optional[dict], frequency_hz: float, bandwidth_hz: 
 # ════════════════════════════════════════════════════════════════════════════
 # Decode-session manager
 # ════════════════════════════════════════════════════════════════════════════
+# These external programs are NOT required — Ares demodulates UAS video in-process
+# (see sdr/native_demod.py). available_decoders() still reports whether any are present
+# (a deployment may prefer them for an even better path), but nothing gates on it.
 _EXTERNAL_TOOLS = ("ffmpeg", "leandvb", "tsp", "sdrangel", "gr-dvbt", "dvbt-rx", "dvbt2-blade", "gr-dvbt2", "gr-isdbt")
 _SESSIONS: dict[str, dict] = {}
+_SESSION_FRAMES: dict[str, list[bytes]] = {}   # sid -> [PNG bytes, ...] from the native demod
 
 
 def available_decoders() -> dict:
@@ -754,6 +762,8 @@ def available_decoders() -> dict:
 
 
 def _capture_backend() -> str:
+    """Where the baseband IQ comes from. The native demod runs regardless of which —
+    'iq_provider' / 'soapysdr' are live captures; 'synthetic_iq' is the offline snapshot."""
     if IQ_PROVIDER is not None:
         return "iq_provider"
     try:
@@ -763,13 +773,17 @@ def _capture_backend() -> str:
         return "synthetic_iq"
 
 
-def _pick_tool_chain(feed_type: str, decoders: dict) -> tuple[list[str], list[str]]:
-    """Return (chosen_pipeline, missing) — chosen is the subset of the feed's
-    decoder_chain that's actually installed (in order), missing is the rest."""
-    chain = _FEED_BY_ID.get(feed_type, {}).get("decoder_chain", [])
-    chosen = [t for t in chain if decoders.get(t.replace("-", "_"), False) or decoders.get(t, False)]
-    missing = [t for t in chain if t not in chosen]
-    return chosen, missing
+def _native_demod_decode(feed: dict, device: dict, frequency_hz: float, bw_hz: float, channel: int) -> dict:
+    """Capture a baseband snapshot and run Ares' in-process software demod over it
+    (sdr/native_demod). Returns the demod result dict (already JSON-safe except for any
+    'frames' / 'byte_stream' which the caller strips)."""
+    from . import native_demod
+    rate = float(max(2.0e6, min(40.0e6, (bw_hz or 8.0e6) * 1.4)))
+    n = int(max(1 << 14, min(1 << 21, rate * 0.045)))   # ~45 ms
+    iq = _capture_iq(device, float(frequency_hz), rate, n, int(channel))
+    if iq is None:
+        return {"ok": False, "error": "no IQ available to demodulate"}
+    return native_demod.decode_feed(feed, iq, rate, max_frames=6)
 
 
 def start_decode(device: Optional[dict], frequency_hz: float, feed_type: Optional[str] = None, *,
@@ -788,7 +802,6 @@ def start_decode(device: Optional[dict], frequency_hz: float, feed_type: Optiona
         return {"error": f"unknown feed_type '{feed_type}'", "feed_types": [x["id"] for x in FEED_TYPES]}
     device = device or {"id": "synthetic", "metadata": {}}
     sid = uuid.uuid4().hex[:12]
-    decoders = available_decoders()
     backend = _capture_backend()
     bw = float(bandwidth_hz or (f["typical_bandwidth_hz"][0] if f["typical_bandwidth_hz"] else 8e6))
     sess = {
@@ -805,20 +818,40 @@ def start_decode(device: Optional[dict], frequency_hz: float, feed_type: Optiona
                            f"geolocates it, but cannot decode the video. {f['notes']}")
         sess["pipeline"] = []
     else:
-        chosen, missing = _pick_tool_chain(feed_type, decoders)
-        if chosen and backend != "synthetic":
-            sess["status"] = "started"
-            sess["pipeline"] = [f"{backend}:capture@{frequency_hz/1e6:.3f}MHz"] + chosen + (["ffmpeg:demux→H.264/H.265"] if "ffmpeg" not in chosen else [])
-            sess["message"] = f"Decoding via {' → '.join(chosen)} (capture: {backend})."
+        # Decode in-process with Ares' own software demodulator (sdr/native_demod) —
+        # no SoapySDR / leandvb / DVB-T(2) receiver / SDRangel / ffmpeg / TSDuck needed.
+        demod = _native_demod_decode(f, device, frequency_hz, bw, channel)
+        # stash any decoded frames as PNGs for the stream endpoint, then strip the heavy arrays
+        frames = demod.pop("frames", None) or []
+        try:
+            from . import native_demod as _nd
+            pngs = [p for p in (_nd.to_png(fr) for fr in frames) if p]
+        except Exception:
+            pngs = []
+        if pngs:
+            _SESSION_FRAMES[sid] = pngs
+        demod.pop("byte_stream", None)
+        sess["demod"] = demod
+        sess["capture_iq"] = backend          # iq_provider | soapysdr | synthetic_iq
+        # the capture + native demod pipeline is running → the session has started; whether the
+        # demod has *locked* (and how clean it is) is reported in sess["demod"]. There is no
+        # "missing tool" state any more — Ares does the demod itself.
+        sess["status"] = "started"
+        sess["pipeline"] = [f"{backend}:capture@{frequency_hz/1e6:.3f}MHz"] + list(demod.get("pipeline", []))
+        if demod.get("ok") and demod.get("kind") == "analog":
+            sess["video_url"] = f"/api/v1/uas/sessions/{sid}/frame.png" if pngs else None
+            sess["message"] = (f"Decoding in-process — native FM/composite video demod: {demod.get('n_frames', 0)} raster frame(s) "
+                               f"recovered (line rate ≈ {demod.get('line_rate_hz_est')} Hz, SNR ≈ {demod.get('snr_db_est')} dB; "
+                               f"capture: {backend}).")
+        elif demod.get("ok"):
+            ts = demod.get("ts") or {}
+            ts_note = (f"; TS sync — {ts.get('klv_units', 0)} KLV unit(s)" if ts.get("ts_sync")
+                       else "; PHY symbols recovered (TS sync needs the inner FEC stage / a cleaner link)")
+            sess["message"] = (f"Decoding in-process — native {demod.get('kind')} demod: {demod.get('modulation', '?')}, "
+                               f"{demod.get('n_symbols', 0)} symbols, EVM ≈ {demod.get('evm_pct')}%{ts_note} (capture: {backend}).")
         else:
-            sess["status"] = "tool_missing" if not chosen else "capture_missing"
-            need = []
-            if backend == "synthetic":
-                need.append("an SDR capture backend (install SoapySDR with the SignalHound / Sidekiq / UHD module, or wire an IQ provider)")
-            if not chosen:
-                need.append("a video demod tool: " + ", ".join(missing or f["decoder_chain"] or ["leandvb / a DVB-T(2) receiver / SDRangel"]) + " (plus ffmpeg or TSDuck for the TS step)")
-            sess["pipeline"] = f["decoder_chain"]
-            sess["message"] = "Cannot start the live decode here — need " + "; and ".join(need) + "."
+            sess["message"] = ("Capture + native software demod running, but it hasn't locked onto the signal yet "
+                               f"({demod.get('error') or demod.get('reason') or 'no lock'}) — a wider/cleaner capture window helps.")
     if auto is not None:
         sess["auto_detected"] = {"confidence": auto.get("confidence"), "alternatives": auto.get("alternatives"),
                                  "channel_plan": auto.get("channel_plan"), "rssi_dbm": auto.get("rssi_dbm")}
@@ -837,7 +870,14 @@ def get_session(sid: str) -> Optional[dict]:
 
 
 def stop_session(sid: str) -> bool:
+    _SESSION_FRAMES.pop(sid, None)
     return _SESSIONS.pop(sid, None) is not None
+
+
+def session_frames(sid: str) -> list[bytes]:
+    """PNG-encoded raster frames recovered by the native analog-video demod for this session
+    (empty for digital feeds or once the session is gone)."""
+    return _SESSION_FRAMES.get(sid, [])
 
 
 def session_metadata(sid: str) -> Optional[dict]:
@@ -902,7 +942,12 @@ def status() -> dict:
         "feed_types": len(FEED_TYPES),
         "decodable_feed_types": sum(1 for f in FEED_TYPES if f["decodable"]),
         "known_channel_plans": len(KNOWN_CHANNELS),
-        "decoders": available_decoders(),
+        "demodulator": "native (in-process, sdr/native_demod): FM/VSB composite video · OFDM/COFDM "
+                       "(CP sync + FFT + 1-tap eq + QPSK/16/64-QAM demap) · single-carrier PSK/QAM "
+                       "(RRC MF + Gardner timing + CMA/DD eq + slicer) → MPEG-TS demux + STANAG-4609 KLV. "
+                       "No SoapySDR / leandvb / DVB-T(2) receiver / SDRangel / ffmpeg / TSDuck required.",
+        "fec_note": "PHY demod only — DVB inner Viterbi+RS(204,188) / DVB-S2 LDPC+BCH not yet applied.",
+        "decoders": available_decoders(),   # presence of optional external tools — informational only; nothing gates on it
         "capture_backend": _capture_backend(),
         "active_sessions": len(_SESSIONS),
         "misb_0601": "parse+encode (ST 0601, STANAG 4609 UAS Datalink LS), with checksum",

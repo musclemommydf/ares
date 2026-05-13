@@ -1,6 +1,6 @@
 # Ares v2.0 — "Authoritative" rewrite
 
-This branch (`ares-authoritative`, `app_version = 2.0.0`, installer **v5.0**) replaces the
+This codebase (`ares`, `app_version = 2.0.0`, installer **v5.0**) replaces the
 *indicative* implementations the [feature critique](./BUILD_PLAN.md) flagged with rigorous,
 reference-grade ones, and adds the multilateration / measured-pattern / TLS pieces that were
 missing entirely. It is API- and UI-compatible with v1.x — the frontend, the SDR/DF pipeline,
@@ -208,7 +208,7 @@ tab); the DF compass shows the latest LoB in **all three reps** (`abs … · rel
 * **Repo + CI** — the v2 line is now a git repo with `.gitignore` (excludes `.venv` / `node_modules` /
   `data/` / secrets / logs) and a GitHub Actions workflow (`.github/workflows/ci.yml`): backend `compileall`
   + app-import + the 53-check validation harness, plus a frontend esbuild bundle-check + Vite build. v1.x
-  (`../ares-atak`) is superseded by this branch.
+  (`../ares-atak`) is superseded by this codebase.
 * **ITM mode label fixed** — the LOS↔transhorizon classification now keys on the terrain take-off angles
   (`tha > 0` ⇒ obstructed) / the actual horizon sum (`dla`), not just the smooth-earth horizon (`dlsa`) —
   a deep mid-path ridge is labelled `diffraction`, flat ground `los`, as it should be (the loss magnitude

@@ -48,6 +48,7 @@ export default function DfPanel() {
   const [tuneHz, setTuneHz] = useState(dev?.frequency_hz || 433.92e6)
   const [threshold, setThreshold] = useState(dev?.df_threshold_dbm ?? -90)
   const [gain, setGain] = useState(30)
+  const [expandPerCh, setExpandPerCh] = useState(false)   // by default show one spectrum per *device*; toggle to one per channel
   const [agc, setAgc] = useState(true)
   const [demod, setDemod] = useState('nfm')
   const [audioStatus, setAudioStatus] = useState(null)
@@ -130,15 +131,29 @@ export default function DfPanel() {
           <select style={{ ...inp, width: 'auto' }} value={devId || ''} onChange={e => setDevId(e.target.value)}>
             {devices.map(d => <option key={d.id} value={d.id}>{d.name} · {d.source_class === 'single_channel' ? '1ch' : `${d.channels}ch`}{d.source_class === 'single_channel' ? ' (no DF)' : ''}</option>)}
           </select>
+          {nCh > 1 && (
+            <button type="button"
+              title={expandPerCh ? 'Showing one spectrum per channel — click to collapse to one per device' : `Showing one spectrum for this device — click to expand to all ${nCh} channels`}
+              onClick={() => setExpandPerCh(v => !v)}
+              style={{ ...inp, cursor: 'pointer', width: 'auto', padding: '4px 8px' }}>
+              {expandPerCh ? `▾ all ${nCh} ch` : `▸ ch0 only`}
+            </button>
+          )}
           <label style={{ color: '#8b949e' }}>centre <input style={inp} type="number" value={center} onChange={e => setCenter(Number(e.target.value) || center)} /> Hz</label>
           <label style={{ color: '#8b949e' }}>span <input style={inp} type="number" value={span} onChange={e => setSpan(Math.max(1e3, Number(e.target.value) || span))} /> Hz</label>
           <span style={{ color: '#6e7681', fontSize: 10 }}>min {((center - span / 2) / 1e6).toFixed(3)} – max {((center + span / 2) / 1e6).toFixed(3)} MHz</span>
         </div>
-        {(frames.length ? frames : [null]).map((fr, i) => (
-          <SpectrumViewer key={i} frame={fr ? { ...fr, df_threshold_dbm: threshold } : null}
-            label={nCh > 1 ? `ch${i}` : ''} tuneHz={tuneHz} onTune={setTuneHz} history={hist[i] || []}
-            height={nCh > 1 ? Math.max(90, Math.floor(360 / nCh)) : 200} />
-        ))}
+        {(() => {
+          // by default show one spectrum per *device* (channel 0); expand to one per channel on demand
+          const allFrames = frames.length ? frames : [null]
+          const shown = (nCh > 1 && !expandPerCh) ? [allFrames[0] ?? null] : allFrames
+          const labelFor = (i) => (nCh > 1 && expandPerCh) ? `ch${i}` : (nCh > 1 ? `${nCh}ch — ch0` : '')
+          const heightFor = () => (shown.length > 1) ? Math.max(90, Math.floor(360 / shown.length)) : 200
+          return shown.map((fr, i) => (
+            <SpectrumViewer key={i} frame={fr ? { ...fr, df_threshold_dbm: threshold } : null}
+              label={labelFor(i)} tuneHz={tuneHz} onTune={setTuneHz} history={hist[i] || []} height={heightFor()} />
+          ))
+        })()}
       </div>
 
       {/* MIDDLE — compass of LoB bearings */}

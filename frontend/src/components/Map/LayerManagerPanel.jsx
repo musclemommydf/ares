@@ -8,6 +8,7 @@
  * Plus session save / load / reset.
  */
 import { useMemo, useRef, useState } from 'react'
+import RegionDownloadPanel from './RegionDownloadPanel'
 
 const KIND_LABELS = {
   geojson: 'Vector',
@@ -36,7 +37,7 @@ function fmtMeters(m) {
   return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(0)} m`
 }
 
-export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef }) {
+export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, regionPreselect, onConsumeRegionPreselect }) {
   const [kindFilter, setKindFilter] = useState(new Set(ALL_KINDS))
   const [tileFormOpen, setTileFormOpen] = useState(false)
   const [tileForm, setTileForm] = useState({
@@ -150,6 +151,9 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef }) {
           </button>
         )}
       </div>
+
+      {/* Download offline mapping data for a state / country / region → the persistent pack library */}
+      <RegionDownloadPanel preselect={regionPreselect} onConsumePreselect={onConsumeRegionPreselect} />
 
       {/* Tile source form */}
       {tileFormOpen && (

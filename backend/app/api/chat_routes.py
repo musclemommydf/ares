@@ -1,5 +1,5 @@
 """
-Ares ATAK — group-chat routes (Workstream D).
+Ares — group-chat routes (Workstream D).
 
 GET  /api/v1/chat/messages?room=&limit=    recent messages (a room, or all rooms)
 GET  /api/v1/chat/rooms                     known rooms / channels

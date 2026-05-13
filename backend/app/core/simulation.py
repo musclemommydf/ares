@@ -632,7 +632,19 @@ class RFSimulator:
                     _, elev = await terrain.get_elevation_profile(tx.lat, tx.lon, la, lo, n_prof)
                 except Exception:
                     elev = np.zeros(n_prof)
-                if req.clutter_height_m > 0:
+                # Per-cell clutter canopy from an installed ESA WorldCover pack (urban / forest / etc.)
+                # — overrides the uniform offset; if no pack, fall back to the uniform value.
+                try:
+                    from app.core import clutter as _clutter
+                    clutter_arr = _clutter.clutter_profile(tx.lat, tx.lon, la, lo, n_prof)
+                except Exception:
+                    clutter_arr = None
+                if clutter_arr is not None:
+                    n_pad = min(len(clutter_arr), len(elev))
+                    elev[:n_pad] = elev[:n_pad] + np.asarray(clutter_arr[:n_pad])
+                    if req.clutter_height_m > 0:
+                        elev = elev + req.clutter_height_m
+                elif req.clutter_height_m > 0:
                     elev = elev + req.clutter_height_m
                 az = initial_bearing(tx.lat, tx.lon, la, lo) or 0.0
                 el_angle = math.degrees(math.atan2((float(elev[-1]) + rx_agl) - (float(elev[0]) + tx_agl), d_m))
@@ -701,8 +713,19 @@ class RFSimulator:
         finally:
             await terrain.close()
 
-        # Apply clutter height (land cover / urban canopy)
-        if req.clutter_height_m > 0:
+        # Per-cell clutter canopy from an installed ESA WorldCover pack (urban / forest / etc.) —
+        # overrides the uniform offset; without a pack, fall back to the uniform value.
+        try:
+            from app.core import clutter as _clutter
+            clutter_arr = _clutter.clutter_profile(tx.lat, tx.lon, req.receiver_lat, req.receiver_lon, len(elev_arr))
+        except Exception:
+            clutter_arr = None
+        if clutter_arr is not None:
+            n_pad = min(len(clutter_arr), len(elev_arr))
+            elev_arr[:n_pad] = elev_arr[:n_pad] + np.asarray(clutter_arr[:n_pad])
+            if req.clutter_height_m > 0:
+                elev_arr = elev_arr + req.clutter_height_m
+        elif req.clutter_height_m > 0:
             elev_arr = elev_arr + req.clutter_height_m
 
         total_dist = haversine_distance(tx.lat, tx.lon, req.receiver_lat, req.receiver_lon)

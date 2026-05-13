@@ -1,5 +1,5 @@
 """
-Ares ATAK — KMZ export of coverage layers (Workstream C, §C.1).
+Ares — KMZ export of coverage layers (Workstream C, §C.1).
 
 Turns a coverage GeoJSON (a ``Point`` FeatureCollection with ``signal_dbm`` /
 ``covered`` properties, as produced by ``/api/v1/simulate/coverage``) into a KMZ
@@ -108,7 +108,7 @@ _KML = """<?xml version="1.0" encoding="UTF-8"?>
     <name>{name}</name>
     <GroundOverlay>
       <name>{name}</name>
-      <description>Ares ATAK coverage layer</description>
+      <description>Ares coverage layer</description>
       <Icon><href>overlay.png</href></Icon>
       <LatLonBox>
         <north>{north}</north><south>{south}</south><east>{east}</east><west>{west}</west>

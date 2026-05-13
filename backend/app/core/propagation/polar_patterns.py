@@ -192,6 +192,26 @@ POLAR_PATTERNS = {
         "category": "Array",
         "description": "Steered array, ~12° HPBW, grating-lobe-like side lobes.",
     },
+
+    # ── Marine / surface-search radar arrays (slotted waveguide) ───────
+    "marine_radar_fan": {
+        "kind": "lobes",
+        # slotted-waveguide marine-radar open array: very narrow horizontal
+        # fan beam, fan-shaped in elevation, ~-26 dB first side lobes, low back
+        "lobes": [(0.0, 0.0, 1.9), (-26.0, 5.0, 3.0), (-26.0, -5.0, 3.0),
+                  (-32.0, 10.0, 4.0), (-32.0, -10.0, 4.0), (-35.0, 180.0, 90.0)],
+        "label": "Marine radar fan beam (open array)",
+        "category": "Radar",
+        "description": "Slotted-waveguide marine-radar open array — ~2° horizontal beamwidth, fan-shaped in elevation (~20–25° VBW), ~-26 dB first side lobes.",
+    },
+    "marine_radar_fan_wide": {
+        "kind": "lobes",
+        "lobes": [(0.0, 0.0, 5.2), (-24.0, 12.0, 6.0), (-24.0, -12.0, 6.0),
+                  (-32.0, 180.0, 90.0)],
+        "label": "Marine radar fan beam (compact / radome)",
+        "category": "Radar",
+        "description": "Compact marine-radar array or radome antenna — ~5° horizontal beamwidth, fan-shaped in elevation.",
+    },
 }
 
 

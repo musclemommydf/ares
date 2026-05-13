@@ -29,7 +29,7 @@ AMBER = "#d9830f"
 PAPER = "#ffffff"
 PANEL = "#f3f6f9"
 LINE = "#d6dde4"
-VERSION = "Ares ATAK v2.0"
+VERSION = "Ares v2.0"
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -284,7 +284,7 @@ def build_flyer(path):
         fig, ax = _fig(LS)
         _header_bar(ax, "Where Ares stands", "No single product spans this — Ares ties the layers together, openly.", kicker="Landscape & deployment", landscape=LS)
         rows = [
-            ("Capability", "Ares ATAK", "Closest existing tools"),
+            ("Capability", "Ares", "Closest existing tools"),
             ("Terrain propagation", "ITS Longley-Rice + ~12 models, raster", "CloudRF · SPLAT! / Radio Mobile (ITM only)"),
             ("Geolocation / DF", "ML fix + error ellipse, TDOA/FDOA, MUSIC", "KrakenSDR doa app (DoA + basic triangulation)"),
             ("SDR spectrum / audio", "spectrum + waterfall, decode bridge", "SDR# / SDRtrunk / op25 (no propagation, no fix)"),
@@ -386,7 +386,7 @@ def build_tutorial(path):
     # 3 — run it
     def s_run(ax, top):
         y = _bullets(ax, 0.055, top - 0.022, [
-            ("Backend (the engine).  ", "cd ares-authoritative && ./start-backend.sh — runs FastAPI on :8000. The first run with auth on logs an admin password once (auth is ON by default unless the server is bound to a loopback address)."),
+            ("Backend (the engine).  ", "cd ares && ./start-backend.sh — runs FastAPI on :8000. The first run with auth on logs an admin password once (auth is ON by default unless the server is bound to a loopback address)."),
             ("Web UI.  ", "./start-web.sh — backend + a built UI on :3000, opens a browser. For development: cd frontend && npm install && npm run dev (:5173)."),
             ("Desktop app.  ", "./start-desktop.sh — the same UI wrapped in Electron."),
             ("Docker.  ", "docker compose up -d — backend + frontend in containers; point ARES_PACKS_HOST_DIR at a pre-staged packs disk, set ARES_AUTH / ARES_NETWORK_POLICY / ARES_MESH_SECRET as needed."),

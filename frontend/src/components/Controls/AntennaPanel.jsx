@@ -207,7 +207,7 @@ function AntennaConfig({ label, ant, setAnt, prefix, showBeamControls, frequency
           />
         </div>
         <div className="field">
-          <label>Downtilt (°)</label>
+          <label title="Mechanical elevation tilt — positive = down, negative = up">Tilt (°)</label>
           <input
             type="number" min="-90" max="90" step="0.5"
             value={ant.antenna.tilt_deg}

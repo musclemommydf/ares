@@ -103,8 +103,8 @@ export default function ResultsPanel({
     )
   }
 
-  // Coverage results
-  if (activeTab === 'coverage' && metadata) {
+  // Coverage results (also covers the radar tab — it shares the coverage path)
+  if ((activeTab === 'coverage' || activeTab === 'radar') && metadata) {
     return (
       <div>
         <div className="stats-grid">

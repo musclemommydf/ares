@@ -1,5 +1,5 @@
 """
-Ares ATAK — authentication layer.
+Ares — authentication layer.
 
 Stateless HMAC-signed bearer tokens (no external deps). Users live in a JSON
 file (``data/users.json``) with PBKDF2-HMAC-SHA256 password hashes. On first run,

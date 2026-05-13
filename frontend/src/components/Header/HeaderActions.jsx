@@ -1,17 +1,18 @@
-import { Trash2, Server, Radio, Video, Zap } from 'lucide-react'
+import { Trash2, Server, Radio, Layers, Calculator, Zap } from 'lucide-react'
 
 const BTN = { gap: 4, fontSize: 11, flexShrink: 0 }
 
 /**
- * The right side of the header: a flex spacer · the GPU badge · Clear · the ATAK/Server,
- * SDR and UAS-Video console buttons · (on the coverage tab) the raster checkbox · the Run
- * button · and the simulation progress bar (absolutely positioned along the bottom of the
- * <header>, which is the nearest positioned ancestor).
+ * The right side of the header: a flex spacer · the GPU badge · Clear · Layers · the
+ * ATAK/Server and SDR console buttons · the dB/power calculator · the Run button · and
+ * the simulation progress bar (absolutely positioned along the bottom of the <header>,
+ * which is the nearest positioned ancestor). The per-pixel raster toggle now lives in
+ * the Propagation panel in the left sidebar.
  */
 export default function HeaderActions({
-  gpuActive, mainMode, activeTab, coverageRaster, onSetRaster,
+  gpuActive, mainMode,
   isSimulating, progress, txActive, sdrActive,
-  onClear, onOpenAtak, onOpenSdr, onOpenUas, onRun,
+  onClear, onOpenLayers, onOpenAtak, onOpenSdr, onOpenDbCalc, onRun,
 }) {
   return (
     <>
@@ -20,6 +21,9 @@ export default function HeaderActions({
 
       <button className="btn btn-ghost" title="Clear all map layers" style={BTN} onClick={onClear}>
         <Trash2 size={13} />
+      </button>
+      <button className="btn btn-ghost" title="Layers — imported KML/GeoJSON/GPX, imagery & tile sources, terrain grids, drawings; session save/load" style={BTN} onClick={onOpenLayers}>
+        <Layers size={13} />
       </button>
       <button className="btn btn-ghost" title="ATAK / Server — offline data packs, radio templates, server status" style={BTN} onClick={onOpenAtak}>
         <Server size={13} />
@@ -33,18 +37,12 @@ export default function HeaderActions({
       </button>
       <button
         className="btn btn-ghost"
-        title="UAS Video — scan a band for drone video downlinks (analog · DVB-T/T2/S/S2 · COFDM · …), decode/characterise, exploit the MPEG-TS → MISB metadata → footprint → ATAK"
-        style={BTN} onClick={onOpenUas}
+        title="Decibel / power calculator — convert between dBm · dBW · W · dBμV · V/m · …"
+        style={BTN} onClick={onOpenDbCalc}
       >
-        <Video size={13} />
+        <Calculator size={13} />
       </button>
 
-      {mainMode === 'propagation' && activeTab === 'coverage' && (
-        <label title="Per-pixel raster coverage — one ITM path per grid cell (even coverage everywhere, no thinning at range; heavier than the radial sweep)"
-               style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: coverageRaster ? '#06d6a0' : '#8b949e', flexShrink: 0, cursor: 'pointer' }}>
-          <input type="checkbox" checked={coverageRaster} onChange={e => onSetRaster(e.target.checked)} /> raster
-        </label>
-      )}
       {mainMode === 'propagation' && (
         <button
           className={`btn ${isSimulating ? 'btn-secondary' : 'btn-primary'}`}

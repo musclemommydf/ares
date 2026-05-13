@@ -1,5 +1,5 @@
 """
-Ares ATAK — serve offline terrain packs to the 3D globe as a Cesium *heightmap*
+Ares — serve offline terrain packs to the 3D globe as a Cesium *heightmap*
 terrain provider (Workstream A / B).
 
 Instead of pre-generating a quantized-mesh tileset, we expose a per-tile

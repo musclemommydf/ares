@@ -1,5 +1,5 @@
 """
-Ares ATAK — geolocation routes (Workstream C / D).
+Ares — geolocation routes (Workstream C / D).
 
 POST /api/v1/geolocate/fix            Lines-of-Bearing → ML Cut/Fix → covariance error ellipse + GeoJSON.
 POST /api/v1/geolocate/multilaterate  TDOA (± FDOA) from ≥3 receivers → hyperbolic fix + error ellipse + GeoJSON.

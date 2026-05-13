@@ -196,6 +196,8 @@ export function createDrawController(map, opts = {}) {
       meta.name = name
       primary.bindPopup(() => buildPopup(id, name, meta))
     }
+    // Click-to-select on every layer of the feature, so the Delete key can remove it.
+    layers.forEach(l => { try { l.on?.('click', () => opts.onFeatureClick?.(id)) } catch {} })
     features.set(id, { id, kind, layers, meta })
 
     // Auto-fit to the new feature unless it's a single point (which is at the
@@ -668,6 +670,7 @@ export function createDrawController(map, opts = {}) {
       const name = g.meta.name || defaultName(g.kind)
       g.meta.name = name
       if (primary?.bindPopup) primary.bindPopup(() => buildPopup(id, name, g.meta))
+      layers.forEach(l => { try { l.on?.('click', () => opts.onFeatureClick?.(id)) } catch {} })
       features.set(id, { id, kind: g.kind, layers, meta: g.meta })
     })
     notify()

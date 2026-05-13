@@ -1,13 +1,14 @@
 import ResultsPanel from '../Results/ResultsPanel'
+import AnalysisResults from '../Results/AnalysisResults'
 import DfPanel from './DfPanel'
 import ChatPanel from './ChatPanel'
 import TerrainTab from './TerrainTab'
-import LayerManagerPanel from '../Map/LayerManagerPanel'
-import DecibelCalculator from '../Tools/DecibelCalculator'
+import UasVideoPanel from '../Tools/UasVideoPanel'
 import ThreeDView from '../Charts/ThreeDView'
 import EmitterSummary from './EmitterSummary'
 import SavedLocations from './SavedLocations'
 import SpaceWxPanel from './SpaceWxPanel'
+import ErrorBoundary from '../Common/ErrorBoundary'
 
 const COL = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
 const HIDDEN = { flex: 1, minHeight: 0, overflow: 'hidden' }
@@ -21,20 +22,30 @@ const SCROLL = { flex: 1, minHeight: 0, overflowY: 'auto' }
 export default function BottomPanelContent({
   active,
   metadata, p2pResult, warnings, activeTab,            // results / budget
-  onChatLocate,                                        // chat
+  analysisResults,                                     // { bestSiteResult, routeResult, multipointResult, manetResult, bestServerResult, bsaPolygonResult, bestSiteCandidates }
+  onChatLocate,                                        // chat / video "fly to"
   terrain,                                             // terrain tab
-  ul, openFileDialog,                                  // layers
+  ul,                                                  // video → "add to map"
   terrainGrid, terrainGridLoading, coverageGeoJSON, buildingGeoJSON,   // 3-D view
   txActive, txLabel, extraTxList, lobs, lobGroups, onRemoveLoB, onEditLoB,   // emitter summary
   savedLocations, onSavedFlyTo, onSavedRemove,         // saved locations
   tx, rx, propagation, spaceWeather,                   // shared
 }) {
+  const COVERAGE_OR_P2P = activeTab === 'coverage' || activeTab === 'radar' || activeTab === 'p2p'
   return (
+    <ErrorBoundary label="This panel" resetKey={active}>
     <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-      {active === 'results' && <div style={SCROLL}><ResultsPanel metadata={metadata} p2pResult={p2pResult} warnings={warnings} spaceWeather={spaceWeather} activeTab={activeTab} /></div>}
+      {active === 'results' && (
+        COVERAGE_OR_P2P
+          ? <div style={SCROLL}><ResultsPanel metadata={metadata} p2pResult={p2pResult} warnings={warnings} spaceWeather={spaceWeather} activeTab={activeTab} /></div>
+          : <div style={SCROLL}><AnalysisResults activeTab={activeTab} {...(analysisResults || {})} /></div>
+      )}
       {active === 'budget' && <div style={SCROLL}><ResultsPanel metadata={metadata} p2pResult={p2pResult} warnings={warnings} spaceWeather={spaceWeather} activeTab={activeTab} showBudget /></div>}
-      {active === 'df' && <div style={HIDDEN}><DfPanel /></div>}
-      {active === 'chat' && <div style={HIDDEN}><ChatPanel onLocate={onChatLocate} /></div>}
+      {active === '3d' && (
+        <div style={COL}>
+          <ThreeDView terrainGrid={terrainGrid} loading={terrainGridLoading} coverageGeoJSON={coverageGeoJSON} buildingGeoJSON={buildingGeoJSON} tx={tx} minSignalDbm={propagation.min_signal_dbm} />
+        </div>
+      )}
       {active === 'terrain' && (
         <TerrainTab
           terrainLineMode={terrain.terrainLineMode}
@@ -50,18 +61,24 @@ export default function BottomPanelContent({
           waveType={propagation.wave_type}
         />
       )}
-      {active === 'layers' && <div style={COL}><LayerManagerPanel ul={ul} openFileDialog={openFileDialog} /></div>}
-      {active === 'dbcalc' && <div style={{ ...HIDDEN, display: 'flex', flexDirection: 'column' }}><DecibelCalculator embedded /></div>}
-      {active === '3d' && (
-        <div style={COL}>
-          <ThreeDView terrainGrid={terrainGrid} loading={terrainGridLoading} coverageGeoJSON={coverageGeoJSON} buildingGeoJSON={buildingGeoJSON} tx={tx} minSignalDbm={propagation.min_signal_dbm} />
-        </div>
-      )}
+      {active === 'df' && <div style={HIDDEN}><DfPanel /></div>}
       {active === 'emitters' && (
         <EmitterSummary txActive={txActive} txLabel={txLabel} tx={tx} extraTxList={extraTxList} lobs={lobs} lobGroups={lobGroups} onRemoveLoB={onRemoveLoB} onEditLoB={onEditLoB} />
       )}
+      {active === 'video' && (
+        <div style={HIDDEN}>
+          <UasVideoPanel
+            embedded
+            mapCenter={{ lat: tx.lat, lon: tx.lon }}
+            onLoadGeoJSON={(name, fc) => ul.addGeoJSONLayer(fc, { name })}
+            onLocate={onChatLocate}
+          />
+        </div>
+      )}
+      {active === 'chat' && <div style={HIDDEN}><ChatPanel onLocate={onChatLocate} /></div>}
       {active === 'savedlocs' && <SavedLocations locations={savedLocations} onFlyTo={onSavedFlyTo} onRemove={onSavedRemove} />}
       {active === 'spacewx' && spaceWeather && <SpaceWxPanel spaceWeather={spaceWeather} />}
     </div>
+    </ErrorBoundary>
   )
 }

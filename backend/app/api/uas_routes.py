@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from app.core.auth import require_auth
@@ -173,17 +173,36 @@ def session_stream(sid: str):
     s = uas_video.get_session(sid)
     if not s:
         raise HTTPException(404, "no such session")
-    # Live video proxying requires the external demod chain + capture backend; until
-    # those run on this host we return the stream descriptor so the UI can show state.
+    frames = uas_video.session_frames(sid)
+    demod = s.get("demod") or {}
     return {
         "session_id": sid, "status": s.get("status"), "feed_type": s.get("feed_type"),
         "transport": s.get("transport"), "capture_backend": s.get("capture_backend"),
         "pipeline": s.get("pipeline"), "message": s.get("message"),
-        "note": ("Video would stream here once the demod chain (e.g. leandvb / a DVB-T(2) receiver / "
-                 "SDRangel headless DATV) and a capture backend (SoapySDR with the SignalHound / Sidekiq / "
-                 "UHD module, or a wired IQ provider) are present; the decoded MPEG-TS / frames would be "
-                 "proxied at this URL."),
+        "demod": demod,
+        "frame_count": len(frames),
+        "frame_url": (f"/api/v1/uas/sessions/{sid}/frame.png" if frames else None),
+        "note": ("Ares demodulates this feed in-process (sdr/native_demod). Analog feeds yield raster "
+                 "frames at frame_url; digital feeds yield recovered PHY symbols + (on a clean link) the "
+                 "demuxed MPEG-TS / KLV — see the 'demod' block. A real H.264/H.265 elementary-stream "
+                 "decode of a recovered TS still benefits from ffmpeg if it's installed."),
     }
+
+
+@router.get("/sessions/{sid}/frame.png")
+def session_frame(sid: str, i: int = 0):
+    """The i-th raster frame recovered by the native analog-video demod, as a PNG.
+    With no index the latest is returned; the index wraps so the UI can cycle."""
+    s = uas_video.get_session(sid)
+    if not s:
+        raise HTTPException(404, "no such session")
+    frames = uas_video.session_frames(sid)
+    if not frames:
+        raise HTTPException(409, "no decoded video frames for this session "
+                                 "(digital feed, or the demod hasn't produced a raster frame)")
+    png = frames[i % len(frames)] if i else frames[-1]
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/sessions/{sid}")

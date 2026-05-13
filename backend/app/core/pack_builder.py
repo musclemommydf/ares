@@ -1,5 +1,5 @@
 """
-Ares ATAK — offline data-pack builder (Workstream A.2).
+Ares — offline data-pack builder (Workstream A.2).
 
 Downloads data into ``data/packs/<layer>/<id>/`` and registers a manifest, with
 progress reported on the job record from :mod:`app.core.packs`.
@@ -107,6 +107,66 @@ def _check_disk(need_bytes: int, where: Path) -> None:
                            f"have {free/1e9:.1f} GB free at {where}")
 
 
+def estimate_bytes(layers: list[str], bbox: Optional[list[float]], max_zoom: Optional[int] = None) -> dict:
+    """Estimate the download size, per layer, for a pack request — *without* fetching anything.
+    Drives the "Get download estimate" button in the Layer Manager. Returns one entry per layer:
+    ``{tiles, bytes, note}``. Counts are exact (the same enumeration the builders use); per-tile
+    byte estimates are the same constants the builders use to plan disk checks."""
+    bb = _clip_bbox(bbox)
+    w, s, e, n = bb
+    out: dict = {}
+    for layer in layers:
+        if layer == "terrain":
+            tiles = _iter_deg_tiles(bb)
+            out[layer] = {
+                "tiles": len(tiles), "bytes": len(tiles) * SRTM1_BYTES_PER_TILE,
+                "note": f"SRTM 30 m · 1° × 1° tiles · ~{SRTM1_BYTES_PER_TILE / 1e6:.0f} MB each (uncompressed)",
+            }
+        elif layer in ("osm", "imagery"):
+            zmax = int(max_zoom or (12 if layer == "osm" else 15))
+            n_tiles = 0
+            for z in range(0, zmax + 1):
+                x0, y0 = _lonlat_to_tile(w, n, z)
+                x1, y1 = _lonlat_to_tile(e, s, z)
+                n_tiles += (abs(x1 - x0) + 1) * (abs(y1 - y0) + 1)
+                if n_tiles > MAX_OSM_TILES:
+                    out[layer] = {
+                        "tiles": MAX_OSM_TILES, "bytes": MAX_OSM_TILES * (OSM_TILE_BYTES_EST if layer == "osm" else IMAGERY_TILE_BYTES_EST),
+                        "exceeds_cap": True, "max_zoom": zmax,
+                        "note": f"would exceed the {MAX_OSM_TILES:,}-tile cap at z{zmax} — shrink the bbox or the max zoom",
+                    }
+                    break
+            else:
+                per = OSM_TILE_BYTES_EST if layer == "osm" else IMAGERY_TILE_BYTES_EST
+                out[layer] = {"tiles": int(n_tiles), "bytes": int(n_tiles) * per, "max_zoom": zmax,
+                              "note": f"XYZ tiles z0–z{zmax} · ~{per / 1024:.0f} kB each"}
+        elif layer == "clutter":
+            lat0 = math.floor(s / 3.0) * 3; lon0 = math.floor(w / 3.0) * 3
+            count = 0
+            for la in range(lat0, math.ceil(n / 3.0) * 3, 3):
+                for lo in range(lon0, math.ceil(e / 3.0) * 3, 3):
+                    count += 1
+            exceeds = count > MAX_WORLDCOVER_TILES
+            out[layer] = {"tiles": count, "bytes": count * WORLDCOVER_BYTES_PER_TILE, "exceeds_cap": exceeds,
+                          "note": f"ESA WorldCover 10 m · 3° × 3° GeoTIFFs · ~{WORLDCOVER_BYTES_PER_TILE / 1e6:.0f} MB each" +
+                                  (f" — would exceed the {MAX_WORLDCOVER_TILES}-tile cap; shrink the bbox" if exceeds else "")}
+        elif layer == "buildings":
+            cells = 0
+            for cs in _frange(s, n, BUILDINGS_CELL_DEG):
+                for cw in _frange(w, e, BUILDINGS_CELL_DEG):
+                    cells += 1
+            exceeds = cells > MAX_BUILDINGS_CELLS
+            # buildings: heavily data-dependent (urban ≫ rural). Use a wide planning estimate.
+            avg_per_cell = 250 * 1024   # ~250 kB / 0.05° cell on average — urban can be 10× more
+            out[layer] = {"tiles": cells, "bytes": cells * avg_per_cell, "exceeds_cap": exceeds,
+                          "note": "OSM buildings (Overpass) · highly variable: urban cells can be 10× this, rural near zero" +
+                                  (f" — would exceed the {MAX_BUILDINGS_CELLS}-cell cap; shrink the bbox" if exceeds else "")}
+        else:
+            out[layer] = {"tiles": 0, "bytes": 0, "note": f"no estimator for layer {layer!r}"}
+    total = sum(v.get("bytes", 0) for v in out.values())
+    return {"per_layer": out, "total_bytes": total, "bbox": list(bb)}
+
+
 def _fail(job: dict, msg: str) -> dict:
     job.update(status="error", detail=msg, finished=time.time())
     log.warning("pack job %s failed: %s", job.get("job_id"), msg)
@@ -210,7 +270,7 @@ async def _build_xyz_pack(job: dict, *, layer: str, default_source: str,
                detail=f"downloading {len(tiles)} {label} tile(s) z0–{zmax} (rate-limited)")
     ok = 0
     timeout = aiohttp.ClientTimeout(total=30, connect=10)
-    headers = {"User-Agent": "ares-atak-pack-builder/0.1 (+https://github.com/)"}
+    headers = {"User-Agent": "ares-pack-builder/0.1 (+https://github.com/)"}
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as sess:
         for (z, x, y) in tiles:
             dst = out_dir / str(z) / str(x) / f"{y}.{ext}"
@@ -283,7 +343,7 @@ async def build_buildings_pack(job: dict) -> dict:
     features: list[dict] = []
     seen_ids: set[int] = set()
     timeout = aiohttp.ClientTimeout(total=90, connect=15)
-    headers = {"User-Agent": "ares-atak-pack-builder/0.1"}
+    headers = {"User-Agent": "ares-pack-builder/0.1"}
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as sess:
         for (cs, cw, cn, ce) in cells:
             q = (f"[out:json][timeout:25];(way[\"building\"]({cs:.5f},{cw:.5f},{cn:.5f},{ce:.5f});"
@@ -366,7 +426,7 @@ async def build_clutter_pack(job: dict) -> dict:
                detail=f"downloading {len(tiles)} ESA WorldCover 10 m tile(s)")
     ok = 0
     timeout = aiohttp.ClientTimeout(total=600, connect=20)
-    headers = {"User-Agent": "ares-atak-pack-builder/0.1"}
+    headers = {"User-Agent": "ares-pack-builder/0.1"}
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as sess:
         for (la, lo) in tiles:
             name = _wc_tile_name(la, lo)

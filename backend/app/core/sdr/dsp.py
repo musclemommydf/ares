@@ -40,6 +40,98 @@ def set_spectrum_provider(fn: Optional[Callable]) -> None:
     SPECTRUM_PROVIDER = fn
 
 
+# A coherent-IQ provider (sdr/iq_capture registers one when SoapySDR is present) — used by the
+# native DF / AoA solver to pull phase-aligned multi-channel baseband from a connected SDR.
+# Signature: fn(device_dict, center_hz, rate_hz, n_samples, channels=(0,1,...)) -> list[np.ndarray] | np.ndarray | None
+IQ_PROVIDER: Optional[Callable] = None
+
+
+def set_iq_provider(fn: Optional[Callable]) -> None:
+    global IQ_PROVIDER
+    IQ_PROVIDER = fn
+
+
+def _synthetic_coherent_iq(geom_n: int, n_samples: int, az_deg: float = 75.0, el_deg: float = 5.0,
+                           freq_hz: float = 433.92e6, snr_db: float = 18.0, seed: int = 0) -> np.ndarray:
+    """An n_samples × geom_n complex IQ block for an array steered (modelled) at (az,el) — drives the
+    native DF path offline. Deterministic per seed; clearly synthetic."""
+    rng = np.random.default_rng(int(seed) ^ 0x5DF)
+    s = (rng.standard_normal(n_samples) + 1j * rng.standard_normal(n_samples)).astype(np.complex64)
+    # a uniform circular array with ~0.4λ element spacing as the default offline geometry
+    lam = 299_792_458.0 / max(1.0, float(freq_hz))
+    r = 0.4 * lam / (2.0 * np.sin(np.pi / max(2, geom_n)))
+    th = 2 * np.pi * np.arange(geom_n) / max(1, geom_n)
+    pos = np.stack([r * np.cos(th), r * np.sin(th), np.zeros(geom_n)], axis=1)
+    k = 2 * np.pi / lam
+    azr, elr = np.radians(az_deg), np.radians(el_deg)
+    u = np.array([np.cos(elr) * np.cos(azr), np.cos(elr) * np.sin(azr), np.sin(elr)])
+    steer = np.exp(1j * k * (pos @ u)).astype(np.complex64)             # geom_n phasors
+    sig = np.outer(s, steer)                                            # n_samples × geom_n
+    npow = 10.0 ** (-snr_db / 10.0)
+    noise = (rng.standard_normal(sig.shape) + 1j * rng.standard_normal(sig.shape)).astype(np.complex64) * np.sqrt(npow / 2.0)
+    return sig + noise
+
+
+def solve_aoa_live(device: Optional[dict], frequency_hz: float, geometry_spec: dict, *,
+                   n_snapshots: int = 4096, channels: Optional[list[int]] = None,
+                   method: str = "music") -> dict:
+    """Native, in-process angle-of-arrival: captures coherent multi-channel IQ from the SDR (via the
+    registered IQ provider, else a synthetic block), then runs the array DF solver
+    (``df.interferometry.aoa_from_snapshots`` — MUSIC / Capon / Bartlett). No external app."""
+    try:
+        from app.core.df.interferometry import geometry_from_spec, aoa_from_snapshots, ArrayGeometry
+    except Exception as e:  # pragma: no cover
+        return {"error": f"DF solver unavailable: {e}"}
+    spec = geometry_spec or {}
+    try:
+        geom = geometry_from_spec(spec) if spec.get("type") else ArrayGeometry.uca(int(spec.get("n", 5)), 0.4 * (299_792_458.0 / max(1.0, float(frequency_hz))) / (2.0 * np.sin(np.pi / max(2, int(spec.get("n", 5))))))
+    except Exception:
+        geom = ArrayGeometry.uca(5, 0.4 * (299_792_458.0 / max(1.0, float(frequency_hz))) / (2.0 * np.sin(np.pi / 5)))
+    nch = geom.n
+    chans = list(channels) if channels else list(range(nch))
+    rate = max(1.0e6, min(20.0e6, geometry_spec.get("sample_rate_hz", 2.4e6)))
+    n = int(max(1024, min(1 << 18, n_snapshots)))
+    src = "synthetic_iq"
+    iq = None
+    if IQ_PROVIDER is not None:
+        try:
+            iq = IQ_PROVIDER(device or {}, float(frequency_hz), float(rate), n, tuple(chans))
+            if iq is not None:
+                src = "iq_provider"
+        except Exception:
+            iq = None
+    if iq is None:
+        # a synthetic coherent block (modelled at a plausible AoA) so the native path runs offline
+        iq = _synthetic_coherent_iq(nch, n, freq_hz=float(frequency_hz))
+    # normalise to an (n_snapshots × n_channels) array
+    arr = np.asarray(iq)
+    if isinstance(iq, list):
+        m = min(len(a) for a in iq)
+        arr = np.stack([np.asarray(a[:m], np.complex64) for a in iq], axis=1)
+    elif arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    elif arr.shape[0] < arr.shape[1]:
+        arr = arr.T
+    arr = arr[:, :nch] if arr.shape[1] >= nch else arr
+    try:
+        # aoa_from_snapshots wants (geom, freq, snapshots) and is forgiving about the (N×K)/(K×N) orientation
+        res = aoa_from_snapshots(geom, float(frequency_hz), arr, method=(method or "music").lower())
+    except Exception as e:  # pragma: no cover
+        return {"error": f"AoA solve failed: {e}", "iq_source": src, "channels": int(arr.shape[1])}
+    out = {
+        "azimuth_deg": getattr(res, "az_deg", None), "elevation_deg": getattr(res, "el_deg", None),
+        "azimuth_sigma_deg": getattr(res, "sigma_az_deg", None), "elevation_sigma_deg": getattr(res, "sigma_el_deg", None),
+        "az_true_deg": getattr(res, "az_true_deg", None),
+        "quality": getattr(res, "quality", None), "snr_db": getattr(res, "snr_db", None),
+        "ambiguities": getattr(res, "ambiguities", None), "spectrum": getattr(res, "spectrum", None),
+        "method": method, "snapshots": int(max(arr.shape)), "channels": int(min(arr.shape)),
+        "frequency_hz": float(frequency_hz), "iq_source": src,
+        "geometry": {"type": getattr(geom, "name", "custom"), "n": nch},
+        "synthetic": src == "synthetic_iq",
+    }
+    return {k: v for k, v in out.items() if v is not None}
+
+
 # ── synthetic spectrum (until hardware is wired) ─────────────────────────────
 def _synthetic_psd(center_hz: float, span_hz: float, n_bins: int, t: float, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(int(t) // 2 ^ seed)        # changes every couple of seconds

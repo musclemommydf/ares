@@ -1,5 +1,5 @@
 """
-Ares ATAK — SDR console routes (Workstream D).
+Ares — SDR console routes (Workstream D).
 
 Single-channel SDRs monitor a spectrum / decode audio; multi-channel SDRs (declare
 the channel count) also produce lines of bearing — more channels ⇒ tighter LoBs.
@@ -326,6 +326,37 @@ async def get_gps(principal: dict = Depends(require_auth)):
 async def set_gps(body: GpsFix, principal: dict = Depends(require_auth)):
     return {"status": "ok", "fix": sdr_manager.set_gps_fix(body.lat, body.lon, body.alt_m,
                                                            body.heading_deg, body.speed_mps, body.source)}
+
+
+# ─── live GPS source: this computer (browser) / a USB GPS (gpsd or serial NMEA) / an SDR's GPSDO ──
+class GpsSourceRequest(BaseModel):
+    kind: str = Field(..., pattern="^(off|manual|browser|gpsd|serial|sdr)$")
+    host: str = "127.0.0.1"            # gpsd host
+    port: int = Field(2947, ge=1, le=65535)   # gpsd port
+    path: str = "/dev/ttyUSB0"          # serial device path (also accepts /dev/ttyACM0 etc.)
+    baud: int = Field(9600, ge=1200, le=921600)
+    device_args: str = ""               # SoapySDR device args for the 'sdr' GPSDO source (blank = first device)
+
+
+@router.get("/gps/source")
+async def get_gps_source(principal: dict = Depends(require_auth)):
+    from app.core.sdr import gps_source
+    return gps_source.status()
+
+
+@router.post("/gps/source")
+async def set_gps_source(body: GpsSourceRequest, principal: dict = Depends(require_auth)):
+    """Pick where the live operator fix comes from. 'browser' / 'manual' need no backend poller —
+    the UI pushes those fixes to POST /sdr/gps directly; 'gpsd' / 'serial' / 'sdr' start a poller
+    that streams fixes in. Nothing runs automatically — a poller starts only on this call."""
+    from app.core.sdr import gps_source
+    try:
+        return gps_source.start(body.kind, host=body.host, port=body.port,
+                                path=body.path, baud=body.baud, device_args=body.device_args)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
 
 
 # ─── spectrum / DF-accuracy / audio decode ───────────────────────────────────

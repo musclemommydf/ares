@@ -1,5 +1,5 @@
 """
-Ares ATAK — FastAPI Application Entry Point
+Ares — FastAPI Application Entry Point
 """
 import asyncio
 import logging
@@ -64,6 +64,14 @@ async def lifespan(app: FastAPI):
         soapy.register()
     except Exception:
         log.debug("SoapySDR shim unavailable", exc_info=True)
+    # Native IQ capture — feeds the UAS-video software demod and the in-process DF/AoA solver
+    # straight from the connected SDR(s) (SignalHound / USRP / Epiq Sidekiq / RTL-SDR via SoapySDR);
+    # a no-op when SoapySDR isn't installed (the synthetic-IQ fallbacks then stay).
+    try:
+        from app.core.sdr import iq_capture
+        iq_capture.register()
+    except Exception:
+        log.debug("native IQ capture unavailable", exc_info=True)
     sdr_manager.set_auto_coverage_runner(_auto_coverage_from_fix)
     await sdr_manager.start()
     # Distributed sensing — connect to any peer Ares nodes on the MANET, fuse

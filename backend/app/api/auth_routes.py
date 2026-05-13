@@ -1,5 +1,5 @@
 """
-Ares ATAK — authentication routes.
+Ares — authentication routes.
 
 POST /api/v1/auth/login   -> { token, expires_at, user }
 GET  /api/v1/auth/me      -> current principal (or anonymous when auth disabled)

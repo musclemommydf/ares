@@ -1,6 +1,6 @@
-# Ares ATAK — Deployment ("Ares-in-a-box")
+# Ares — Deployment ("Ares-in-a-box")
 
-This is the field-deployment guide for **Ares ATAK** — a self-contained Ares server
+This is the field-deployment guide for **Ares** — a self-contained Ares server
 that the ARES-ATAK plugin (and the web/desktop UI) talks to, on the same hardware
 spectrum CloudRF's SOOTHSAYER targets. Three things make a deployment "field-ready":
 
@@ -31,7 +31,7 @@ so even the Pi-5 tier is a usable "vehicle box" for the low-bandwidth modes.
 
 ### Bare metal / VM
 ```bash
-git clone <ares-atak> && cd ares-atak
+git clone <ares> && cd ares
 ./install.sh                       # detects Python/Node/CUDA, builds the frontend, makes start-*.sh
 ARES_AUTH=true ./start-backend.sh  # uvicorn on :8000 — see Auth below for the admin password
 ```
@@ -40,7 +40,7 @@ ARES_AUTH=true ./start-backend.sh  # uvicorn on :8000 — see Auth below for the
 On a connected machine, build the bundle once:
 ```bash
 # point a fresh data dir at the box and download the AO packs you want…
-cd ares-atak/backend
+cd ares/backend
 ARES_DATA=./bundle python -m app.main &   # (or just use the running server's data/ dir)
 # …via the web "ATAK / Server" console or the API:
 #   POST /api/v1/packs/download {"layers":["terrain"],   "bbox":[-6,49,2,59]}        # SRTM30

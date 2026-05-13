@@ -1,5 +1,5 @@
 """
-Ares ATAK — array direction-finding routes (Workstream D).
+Ares — array direction-finding routes (Workstream D).
 
 POST /api/v1/df/aoa   antenna-array snapshot → angle of arrival (+ CRLB σ, ambiguities, spectrum)
 GET  /api/v1/df/info  available methods / array builders / clutter+SGP4 backend status
@@ -124,3 +124,63 @@ async def df_aoa(req: AoaRequest, principal: dict = Depends(require_auth)):
         out["lob"] = aoa_to_lob(res, req.observer.dict(), req.frequency_hz, rssi_dbm=req.rssi_dbm)
         out["lob"]["device_id"] = req.observer.device_id or out["lob"].get("device_id", "")
     return {"status": "ok", **out}
+
+
+class AoaLiveRequest(BaseModel):
+    """Native (in-process) AoA: Ares captures coherent IQ straight from the named SDR (a SignalHound /
+    USRP / Epiq Sidekiq / RTL-SDR enumerated by the SDR console) and runs MUSIC/Capon/Bartlett on it
+    — no external SDR application. With no SDR present it falls back to a synthetic coherent block so
+    the path still exercises offline (``synthetic: true`` in the response)."""
+    array: ArraySpec
+    frequency_hz: float = Field(..., gt=0)
+    device_id: Optional[str] = None
+    channels: Optional[list[int]] = None
+    n_snapshots: int = Field(4096, ge=256, le=262144)
+    sample_rate_hz: float = Field(2.4e6, gt=1e5, le=20e6)
+    method: str = Field("music", pattern="^(music|capon|bartlett)$")
+    observer: Optional[ObserverSpec] = None
+    rssi_dbm: float = -75.0
+
+
+@router.post("/aoa_live")
+async def df_aoa_live(req: AoaLiveRequest, principal: dict = Depends(require_auth)):
+    from app.core.sdr import dsp
+    from app.core.sdr import sdr_manager
+    # resolve the SDR device dict from the SDR console (so its driver/serial → SoapySDR args), if given
+    device = None
+    if req.device_id:
+        for attr in ("get", "device", "get_device"):
+            fn = getattr(sdr_manager, attr, None)
+            if callable(fn):
+                try:
+                    d = fn(req.device_id)
+                except Exception:
+                    d = None
+                if d is not None:
+                    device = d.public() if hasattr(d, "public") else (d if isinstance(d, dict) else {"id": req.device_id})
+                    break
+        if device is None:
+            device = {"id": req.device_id, "metadata": {}}
+    spec = {**req.array.dict(), "sample_rate_hz": req.sample_rate_hz}
+    heading = req.observer.heading_deg if req.observer else None
+    res = dsp.solve_aoa_live(device, req.frequency_hz, spec, n_snapshots=req.n_snapshots,
+                             channels=req.channels, method=req.method)
+    if "error" in res:
+        raise HTTPException(500, res["error"])
+    if heading is not None and isinstance(res.get("azimuth_deg"), (int, float)):
+        res["true_bearing_deg"] = (res["azimuth_deg"] + heading) % 360.0
+    if req.observer is not None and isinstance(res.get("azimuth_deg"), (int, float)):
+        res["lob"] = {
+            "lat": req.observer.lat, "lon": req.observer.lon, "device_id": req.observer.device_id or "",
+            "bearing_deg": res.get("true_bearing_deg", res["azimuth_deg"]),
+            "sigma_deg": res.get("azimuth_sigma_deg"), "frequency_hz": req.frequency_hz, "rssi_dbm": req.rssi_dbm,
+            "method": "array-" + req.method, "source": res.get("iq_source"),
+        }
+    return {"status": "ok", **res}
+
+
+@router.get("/iq_backend")
+async def df_iq_backend(principal: dict = Depends(require_auth)):
+    """Which SDR backend the native DF / UAS-demod capture path is using, and the SDRs it can see."""
+    from app.core.sdr import iq_capture
+    return iq_capture.status()

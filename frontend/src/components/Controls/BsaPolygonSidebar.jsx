@@ -1,11 +1,11 @@
 import { Hexagon } from 'lucide-react'
 
 /**
- * The sidebar control for the Best-Site-Polygon tab: draw / clear the polygon, the
- * grid-sample-density slider, and the top candidate sites once it has run. App owns
- * the polygon coords, the sample-density %, the result and the draw mode.
+ * Sidebar inputs for the Best-Site-Polygon tab: draw / clear the polygon, and the grid-sample-
+ * density slider. The *result* — the top candidate sites — is rendered in the bottom Results tab
+ * (see <AnalysisResults>), not here.
  */
-export default function BsaPolygonSidebar({ drawMode, polygonCoords, coveragePct, result, onToggleDraw, onClearPolygon, onSetCoveragePct }) {
+export default function BsaPolygonSidebar({ drawMode, polygonCoords, coveragePct, onToggleDraw, onClearPolygon, onSetCoveragePct }) {
   return (
     <div style={{ borderTop: '1px solid #21262d', padding: '8px 12px' }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 6 }}>BEST SITE — POLYGON</div>
@@ -28,20 +28,7 @@ export default function BsaPolygonSidebar({ drawMode, polygonCoords, coveragePct
         <label style={{ fontSize: 11, color: '#8b949e', display: 'block', marginBottom: 4 }}>Sample Density: {coveragePct}%</label>
         <input type="range" min={5} max={100} step={5} value={coveragePct} onChange={e => onSetCoveragePct(Number(e.target.value))} style={{ width: '100%' }} />
       </div>
-      {result?.sites && (
-        <div style={{ padding: 8, background: '#0d1117', borderRadius: 4, border: '1px solid #21262d' }}>
-          <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 4 }}>Best of {result.num_candidates} candidates:</div>
-          {result.sites.slice(0, 3).map((s, i) => (
-            <div key={i} style={{
-              fontSize: 11, padding: '2px 0', borderBottom: '1px solid #21262d',
-              display: 'flex', justifyContent: 'space-between',
-            }}>
-              <span style={{ color: i === 0 ? '#06d6a0' : '#c9d1d9' }}>{i + 1}. {s.lat?.toFixed(4)}, {s.lon?.toFixed(4)}</span>
-              <span style={{ color: '#8b949e' }}>{s.covered_area_km2} km²</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <div style={{ fontSize: 10, color: '#484f58' }}>Run Simulation → top candidates show in the bottom <strong>Results</strong> tab.</div>
     </div>
   )
 }

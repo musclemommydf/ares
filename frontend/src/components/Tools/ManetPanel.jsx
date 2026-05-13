@@ -10,17 +10,8 @@ export default function ManetPanel({
   onAddNode,
   onRemoveNode,
   onUpdateNode,
-  result,
   isSimulating,
 }) {
-  const connectedCount = result?.features?.filter(
-    f => f.properties?.connected && f.geometry?.type === 'LineString'
-  ).length || 0
-
-  const totalLinks = result?.features?.filter(
-    f => f.geometry?.type === 'LineString'
-  ).length || 0
-
   return (
     <div style={{ padding: '8px 12px', borderTop: '1px solid #21262d' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -104,51 +95,7 @@ export default function ManetPanel({
         )}
       </div>
 
-      {result && (
-        <div style={{ marginTop: 10, padding: '8px', background: '#0d1117', borderRadius: 4, border: '1px solid #21262d' }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 4 }}>
-            MANET ANALYSIS RESULT
-          </div>
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-            <div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: '#06d6a0' }}>{connectedCount}</div>
-              <div style={{ fontSize: 10, color: '#8b949e' }}>Connected links</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: '#ef4444' }}>{totalLinks - connectedCount}</div>
-              <div style={{ fontSize: 10, color: '#8b949e' }}>Disconnected</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: '#00b4d8' }}>
-                {totalLinks > 0 ? Math.round(connectedCount / totalLinks * 100) : 0}%
-              </div>
-              <div style={{ fontSize: 10, color: '#8b949e' }}>Connectivity</div>
-            </div>
-          </div>
-
-          {/* Per-link table */}
-          {totalLinks > 0 && (
-            <div style={{ marginTop: 8, maxHeight: 120, overflowY: 'auto' }}>
-              {result.features
-                .filter(f => f.geometry?.type === 'LineString')
-                .sort((a, b) => (b.properties?.signal_dbm ?? -999) - (a.properties?.signal_dbm ?? -999))
-                .map((f, i) => (
-                  <div key={i} style={{
-                    display: 'flex', justifyContent: 'space-between',
-                    fontSize: 10, padding: '2px 0', borderBottom: '1px solid #21262d',
-                  }}>
-                    <span style={{ color: f.properties?.connected ? '#06d6a0' : '#ef4444' }}>
-                      {f.properties?.connected ? '✓' : '✗'} {f.properties?.node_a} → {f.properties?.node_b}
-                    </span>
-                    <span style={{ color: '#8b949e' }}>
-                      {f.properties?.signal_dbm} dBm · {(f.properties?.distance_m / 1000).toFixed(1)} km
-                    </span>
-                  </div>
-                ))}
-            </div>
-          )}
-        </div>
-      )}
+      <div style={{ fontSize: 10, color: '#484f58', marginTop: 8 }}>Run Simulation → connectivity + per-link results show in the bottom <strong>Results</strong> tab.</div>
     </div>
   )
 }

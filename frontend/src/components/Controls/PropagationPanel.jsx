@@ -87,6 +87,7 @@ const TOOLTIPS = {
   min_signal: 'The weakest signal level that counts as "covered". Points below this threshold are not drawn on the map. Typical receiver sensitivity is −100 to −120 dBm.',
   radials: 'Number of directions (spokes) swept out from the transmitter. More radials give a smoother, higher-resolution coverage shape but increase computation time linearly.',
   points_per_radial: 'How many distance samples are computed along each radial spoke. Higher values increase detail at long range but also increase compute time.',
+  raster: 'Per-pixel raster coverage — runs one path calculation per grid cell instead of sweeping radial spokes. Gives even coverage everywhere (no thinning at range) at the cost of more compute. When on, the Radials / Points-per-radial settings are ignored.',
   terrain_resolution: 'The resolution of the SRTM elevation data used for terrain-aware models. SRTM 30 m is more detailed but slower to download and compute. SRTM 90 m is faster and sufficient for most use cases.',
   space_weather: 'Fetches live solar flux, K-index, and geomagnetic data from NOAA SWPC and applies corrections to HF path loss. Adds a small network delay. Disable for offline use.',
   buildings: 'Downloads OpenStreetMap building footprints and uses them as additional diffraction obstacles. Only meaningful at short ranges (< 5 km) and higher frequencies.',
@@ -156,7 +157,10 @@ function FieldTooltip({ text }) {
 
 // ── Main panel ────────────────────────────────────────────────────────────────
 
-export default function PropagationPanel({ propagation, setPropagation, resolvedModel, distUnit = 'metric' }) {
+export default function PropagationPanel({
+  propagation, setPropagation, resolvedModel, distUnit = 'metric',
+  activeTab = 'coverage', coverageRaster = false, onSetRaster,
+}) {
   const [open, setOpen] = useState(true)
   const update = (field, value) => setPropagation(prev => ({ ...prev, [field]: value }))
 
@@ -337,6 +341,7 @@ export default function PropagationPanel({ propagation, setPropagation, resolved
                 type="number" min="8" max="3600" step="8"
                 value={propagation.num_radials}
                 onChange={e => update('num_radials', parseInt(e.target.value))}
+                disabled={activeTab === 'coverage' && coverageRaster}
               />
             </div>
             <div className="field">
@@ -348,9 +353,25 @@ export default function PropagationPanel({ propagation, setPropagation, resolved
                 type="number" min="10" max="2000" step="10"
                 value={propagation.points_per_radial}
                 onChange={e => update('points_per_radial', parseInt(e.target.value))}
+                disabled={activeTab === 'coverage' && coverageRaster}
               />
             </div>
           </div>
+
+          {/* Per-pixel raster coverage (coverage tab only) */}
+          {activeTab === 'coverage' && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12,
+                            cursor: 'pointer', userSelect: 'none', marginTop: 2,
+                            color: coverageRaster ? '#06d6a0' : undefined }}>
+              <input
+                type="checkbox"
+                checked={coverageRaster}
+                onChange={e => onSetRaster?.(e.target.checked)}
+              />
+              Per-pixel raster coverage
+              <FieldTooltip text={TOOLTIPS.raster} />
+            </label>
+          )}
 
           {/* Terrain resolution + Clutter */}
           <div className="field-row">

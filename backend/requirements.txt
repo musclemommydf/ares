@@ -21,3 +21,4 @@ pygeodesy>=24.1
 rich>=13.7
 loguru>=0.7
 python-dotenv>=1.0
+pyserial>=3.5            # serial-NMEA reader for a USB GPS dongle (the gpsd path needs no Python dep)

@@ -72,6 +72,8 @@ export function useUserLayers() {
   const terrainGridsRef = useRef(new Map())    // id → { bounds, cols, rows, dx, dy, data }
   const pendingRestoreRef = useRef(null)       // session queued for first bind
   const importSessionRef = useRef(null)        // forward ref to importSession (defined later)
+  const exportSessionRef = useRef(null)        // forward ref to exportSession (defined later)
+  const selectedRef = useRef(null)             // { kind: 'layer'|'drawn', id } — last feature clicked on the map
 
   const [layers, setLayers] = useState([])
   const [drawnFeatures, setDrawnFeatures] = useState([])
@@ -116,12 +118,30 @@ export function useUserLayers() {
   const bindMap = useCallback((map, drawCtrl) => {
     // Idempotent: ignore re-binds with the same instances
     if (mapRef.current === map && drawCtrlRef.current === drawCtrl) return
+
+    // 2D⇄3D round-trips replace the whole Leaflet map (and the draw controller). The Leaflet
+    // layer objects in layersRef belong to the *old* map, and the new draw controller starts
+    // empty — so snapshot what's loaded now and rebuild it on the new map, silently (no camera
+    // jump). drawnGeoJSON survives in React state even after the old controller is gone.
+    const hasContent = layersRef.current.size > 0 || ((drawnGeoJSON?.features?.length || 0) > 0)
+    let carry = null
+    if (hasContent && map && drawCtrl) {
+      try { carry = exportSessionRef.current ? { ...exportSessionRef.current() } : null } catch { carry = null }
+      if (!carry) carry = { version: 1, layers: [] }
+      if (!carry.drawings?.features?.length && drawnGeoJSON?.features?.length) carry.drawings = drawnGeoJSON
+    }
+
     // Tear down previous binding if any
     if (mapRef.current && mapRef.current.__userLayersZoomHandler) {
       mapRef.current.off('zoomend', mapRef.current.__userLayersZoomHandler)
       delete mapRef.current.__userLayersZoomHandler
     }
     if (drawUnsubRef.current) { drawUnsubRef.current(); drawUnsubRef.current = null }
+    // The Leaflet layer objects are bound to the dead map — drop them; importSession rebuilds.
+    if (carry) {
+      layersRef.current.forEach(e => { try { e.leafletLayer?.remove?.() } catch {} })
+      layersRef.current.clear(); terrainGridsRef.current.clear()
+    }
 
     mapRef.current = map
     drawCtrlRef.current = drawCtrl
@@ -141,13 +161,17 @@ export function useUserLayers() {
       syncDrawn()
     }
 
+    // Re-apply the carried-over layers/drawings (silently — keep the camera where it is).
+    if (carry && mapRef.current && drawCtrlRef.current) {
+      try { importSessionRef.current?.(carry, { fit: false }) } catch {}
+    }
     // Apply any session that arrived before the map+draw controller were ready
     if (pendingRestoreRef.current && mapRef.current && drawCtrlRef.current) {
       const queued = pendingRestoreRef.current
       pendingRestoreRef.current = null
       try { importSessionRef.current?.(queued) } catch {}
     }
-  }, [applyZoomVisibility])
+  }, [applyZoomVisibility, drawnGeoJSON])
 
   const unbindMap = useCallback(() => {
     const map = mapRef.current
@@ -220,6 +244,7 @@ export function useUserLayers() {
       },
       onEachFeature: (feature, lyr) => {
         const p = feature.properties || {}
+        lyr.on('click', () => { selectedRef.current = { kind: 'layer', id } })   // click-to-select (Delete-key removes it)
         const ug = p.uas_glx || p.rid_glx
         if (ug) {
           const tip = String(p.serial || p.call_sign || ({ drone: 'UAS', platform: 'UAS', operator: 'operator', home: 'home', frame_center: 'frame centre', footprint: 'footprint', area: 'op. area', los: 'sensor LOS', platform_track: 'track' }[ug] || ug))
@@ -477,6 +502,18 @@ export function useUserLayers() {
   }, [])
   const clearDrawn = useCallback(() => drawCtrlRef.current?.clearAll(), [])
 
+  // ── Click-to-select + Delete-key removal ───────────────────────────────
+  const selectFeature = useCallback((sel) => { selectedRef.current = sel || null }, [])
+  const getSelectedFeature = useCallback(() => selectedRef.current, [])
+  const removeSelected = useCallback(() => {
+    const s = selectedRef.current
+    if (!s) return null
+    selectedRef.current = null
+    if (s.kind === 'drawn') { drawCtrlRef.current?.removeFeature(s.id); return 'drawn' }
+    if (s.kind === 'layer') { removeLayer(s.id); return 'layer' }
+    return null
+  }, [removeLayer])
+
   // ── Sample terrain at lat/lon — checks all loaded grids ────────────────
   const sampleTerrain = useCallback((lat, lon) => {
     for (const g of terrainGridsRef.current.values()) {
@@ -565,9 +602,11 @@ export function useUserLayers() {
     if (drawCtrlRef.current) session.drawings = drawCtrlRef.current.exportGeoJSON()
     return session
   }, [])
+  exportSessionRef.current = exportSession
 
-  const importSession = useCallback((session) => {
+  const importSession = useCallback((session, opts = {}) => {
     if (!session) return
+    const fit = opts.fit !== false   // a 2D⇄3D re-bind carries layers over silently — don't move the camera
     clearAll()
     drawCtrlRef.current?.clearAll?.()
     if (!Array.isArray(session.layers)) session.layers = []
@@ -607,7 +646,7 @@ export function useUserLayers() {
           }
         } catch {}
       })
-      if (union && union.isValid()) {
+      if (fit && union && union.isValid()) {
         map.fitBounds(union, { padding: [40, 40] })
       }
     }
@@ -641,6 +680,8 @@ export function useUserLayers() {
     // mutators
     removeLayer, setLayerProperty, renameLayer, focusLayer, getLayerBounds, clearAll,
     removeDrawnFeature, focusDrawnFeature, clearDrawn,
+    // click-to-select / Delete-key
+    selectFeature, getSelectedFeature, removeSelected,
     // queries
     sampleTerrain, hasTerrain, sampleTerrainAlongPath,
     // session

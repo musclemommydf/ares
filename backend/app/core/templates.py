@@ -1,5 +1,5 @@
 """
-Ares ATAK — radio template store (Workstream C).
+Ares — radio template store (Workstream C).
 
 A *template* is a JSON document describing a radio's RF parameters (the
 SOOTHSAYER/CloudRF "template" concept). Operators load templates in the ATAK

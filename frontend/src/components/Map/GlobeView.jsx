@@ -100,6 +100,8 @@ export default function GlobeView({
   const setBasemapId = useMapPrefs((s) => s.setBasemapId)
   const mapColors = useMapPrefs((s) => s.mapColors)
   const covMode = useMapPrefs((s) => s.coverageMode)
+  const covHeight = useMapPrefs((s) => s.coverageHeight)
+  const setCovHeight = useMapPrefs((s) => s.setCoverageHeight)
   // toolbar UI state
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -138,6 +140,25 @@ export default function GlobeView({
     viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0d2438')
     viewer.scene.globe.showGroundAtmosphere = true
     if (viewer.scene.skyAtmosphere) viewer.scene.skyAtmosphere.show = true
+    // ── camera controls: left-drag = spin/orbit, RIGHT-drag = tilt (change view angle),
+    //    wheel = zoom (Shift+right-drag also zooms), Shift+left-drag = free-look. Smoother inertia,
+    //    and stop the camera from diving below terrain. (Cesium's default puts zoom on right-drag,
+    //    which feels backwards — this swaps it so the right mouse button changes the view angle.)
+    try {
+      const E = Cesium.CameraEventType, M = Cesium.KeyboardEventModifier
+      const cc = viewer.scene.screenSpaceCameraController
+      cc.rotateEventTypes = E.LEFT_DRAG
+      cc.tiltEventTypes = [E.RIGHT_DRAG, E.PINCH, { eventType: E.LEFT_DRAG, modifier: M.CTRL }]
+      cc.zoomEventTypes = [E.WHEEL, E.PINCH, { eventType: E.RIGHT_DRAG, modifier: M.SHIFT }]
+      cc.lookEventTypes = [{ eventType: E.LEFT_DRAG, modifier: M.SHIFT }]
+      cc.translateEventTypes = [{ eventType: E.LEFT_DRAG, modifier: M.ALT }]
+      cc.enableRotate = cc.enableZoom = cc.enableTilt = cc.enableLook = true
+      cc.enableTranslate = true
+      cc.inertiaSpin = 0.92; cc.inertiaTranslate = 0.92; cc.inertiaZoom = 0.85
+      cc.enableCollisionDetection = true
+      cc.minimumZoomDistance = 1.5
+      cc.maximumZoomDistance = 5.0e7
+    } catch (e) { /* older Cesium — keep the defaults */ }
     requestRenderRef.current = () => { try { viewer.scene.requestRender() } catch { /* noop */ } }
     // (basemap imagery is applied by its own effect below, so it tracks the shared store)
 
@@ -603,14 +624,21 @@ export default function GlobeView({
       const pts = new Cesium.PointPrimitiveCollection()
       const stride = Math.max(1, Math.ceil(feats.length / 60_000))
       const carts = []
+      // "beam" mode floats each point at the midpoint of the transmit antenna's beam-height
+      // window (AGL), draped over the real terrain — i.e. the "3D View" tab look, on the globe.
+      const beamMin = tx?.antenna?.beam_height_min_m ?? 2
+      const beamMax = tx?.antenna?.beam_height_max_m ?? 50
+      const beamMid = Math.max(1, (beamMin + beamMax) / 2)
+      const useBeam = covHeight === 'beam' && beamMid > 1
+      const heightRef = useBeam ? Cesium.HeightReference.RELATIVE_TO_GROUND : Cesium.HeightReference.CLAMP_TO_GROUND
       for (let i = 0; i < feats.length; i += stride) {
         const [lon, lat] = feats[i].geometry.coordinates
         if (typeof lon !== 'number' || typeof lat !== 'number') continue
         const [r, g, b, a] = signalToColor(feats[i].properties?.signal_dbm ?? minSignalDbm, minSignalDbm)
-        const p = Cesium.Cartesian3.fromDegrees(lon, lat)
+        const p = useBeam ? Cesium.Cartesian3.fromDegrees(lon, lat, beamMid) : Cesium.Cartesian3.fromDegrees(lon, lat)
         carts.push(p)
         pts.add({ position: p, color: new Cesium.Color(r / 255, g / 255, b / 255, a / 255),
-                  pixelSize: 6, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND })
+                  pixelSize: 6, heightReference: heightRef })
       }
       v.scene.primitives.add(pts)
       layersRef.current.coveragePoints = pts
@@ -626,7 +654,7 @@ export default function GlobeView({
     }
     if (bs && bs.radius > 0) v.camera.flyToBoundingSphere(bs, { duration: 1.0 })
     requestRenderRef.current()
-  }, [coverageGeoJSON, minSignalDbm, covMode])
+  }, [coverageGeoJSON, minSignalDbm, covMode, covHeight, tx?.antenna?.beam_height_min_m, tx?.antenna?.beam_height_max_m])
 
   // ── vector overlays: extra layers + TX/RX + LOS + Fresnel + antenna lobe ───
   useEffect(() => {
@@ -660,6 +688,9 @@ export default function GlobeView({
 
     // imported layers (KML / KMZ / GeoJSON / GPX dragged onto the *2D* map, or the
     // 📥 globe button) — render them here too so they persist across 2D⇄3D.
+    // Feature-name labels fade out beyond ~120 km camera distance so a high-altitude
+    // view isn't buried under placemark text (Cesium's own clustering handles the rest).
+    const labelDDC = new Cesium.DistanceDisplayCondition(0.0, 120000.0)
     for (const layer of (ul?.layers || [])) {
       if (!layer || layer.visible === false || layer.kind !== 'geojson' || !layer.geojson) continue
       const layerC = Cesium.Color.fromCssColorString(layer.color || '#22d3ee')
@@ -687,6 +718,7 @@ export default function GlobeView({
                        heightReference: typeof h === 'number' ? Cesium.HeightReference.NONE : Cesium.HeightReference.CLAMP_TO_GROUND },
               label: ugLabel || (p.name ? { text: String(p.name), font: '11px sans-serif', fillColor: Cesium.Color.WHITE,
                 pixelOffset: new Cesium.Cartesian2(0, -14), style: Cesium.LabelStyle.FILL_AND_OUTLINE, outlineWidth: 2,
+                distanceDisplayCondition: labelDDC,
                 heightReference: Cesium.HeightReference.CLAMP_TO_GROUND } : undefined) })
           } else if (g.type === 'LineString') {
             ds.entities.add({ polyline: { positions: g.coordinates.map(([lo, la]) => Cesium.Cartesian3.fromDegrees(lo, la)),
@@ -736,6 +768,7 @@ export default function GlobeView({
               point: { pixelSize: 8, color: stroke, outlineColor: Cesium.Color.BLACK, outlineWidth: 1, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND },
               label: props.name ? { text: String(props.name), font: '11px sans-serif', fillColor: Cesium.Color.WHITE,
                 pixelOffset: new Cesium.Cartesian2(0, -14), style: Cesium.LabelStyle.FILL_AND_OUTLINE, outlineWidth: 2,
+                distanceDisplayCondition: labelDDC,
                 heightReference: Cesium.HeightReference.CLAMP_TO_GROUND } : undefined })
           }
         } else if (t === 'LineString') {
@@ -921,10 +954,14 @@ export default function GlobeView({
             <button className={btn(drawPaletteOpen || !!drawTool)} style={BTN_STYLE}
                     title="Annotation drawing tools (point / line / polygon / rectangle — more coming)"
                     onClick={() => { if (drawTool) { setDrawTool(null) } else { setDrawPaletteOpen(o => !o) } }}>✎{drawTool ? ' •' : ''}</button>
-            <button className="btn btn-ghost" style={BTN_STYLE} title="Load KMZ / KML onto the globe (ATAK / WinTAK / Google Earth)" onClick={() => kmzFileInputRef.current?.click()}>📥</button>
             <input ref={kmzFileInputRef} type="file" accept=".kmz,.kml,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
                    style={{ display: 'none' }} onChange={onKmzPicked} />
-            <button className="btn btn-ghost" style={BTN_STYLE} title="Export the current coverage to KMZ (ATAK image overlay / WinTAK)" onClick={exportCoverageAsKmz} disabled={!coverageGeoJSON}>💾</button>
+            <button className={btn(covHeight === 'beam')} style={BTN_STYLE}
+                    title={covHeight === 'beam' ? 'Coverage is floating at the antenna beam-height midpoint (RF on the terrain in 3D). Click to drape it on the ground.'
+                                                  : 'Coverage is clamped to the terrain. Click to extrude it at the antenna beam-height midpoint (like the 3D View tab).'}
+                    onClick={() => setCovHeight(covHeight === 'beam' ? 'ground' : 'beam')}>
+              {covHeight === 'beam' ? '▲ beam' : '▼ ground'}
+            </button>
             <button className="btn btn-ghost" style={BTN_STYLE} title="Switch to the 2D map" onClick={() => setViewMode('2d')}>2D</button>
             <MapSettingsCog
               kind="3d"

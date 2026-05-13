@@ -1,28 +1,23 @@
 import { ChevronDown } from 'lucide-react'
 
 const SIMPLE_TABS = [
-  ['results', 'Results'], ['terrain', 'Terrain Profile'], ['budget', 'Link Budget'],
-  ['3d', '3D View'], ['df', 'DF'], ['chat', 'Chat'], ['dbcalc', 'dB Calc'],
+  ['results', 'Results'], ['budget', 'Link Budget'], ['3d', '3D View'],
+  ['terrain', 'Terrain Profile'], ['df', 'DF'], ['emitters', 'Emitter Summary'],
+  ['video', 'Video'], ['chat', 'Chat'],
 ]
 
 /**
- * The bottom-panel tab bar: Results / Terrain Profile / Link Budget / 3D View / DF /
- * Chat / dB Calc / Layers / Emitter Summary / Saved Locations / (Space Wx, when space
- * weather is available), plus the hide button. App owns the active tab, the counts,
- * the spaceWeather gate and the close action.
+ * The bottom-panel tab bar: Results / Link Budget / 3D View / Terrain Profile / DF /
+ * Emitter Summary / Video / Chat / Saved Locations / (Space Wx, when space weather is
+ * available), plus the hide button. App owns the active tab, the counts, the spaceWeather
+ * gate and the close action. (dB Calc and Layers live in the header now.)
  */
-export default function BottomPanelTabs({ active, onSelect, layerCount, savedCount, spaceWeather, onClose }) {
+export default function BottomPanelTabs({ active, onSelect, savedCount, spaceWeather, onClose }) {
   return (
     <div className="tabs" style={{ alignItems: 'center' }}>
       {SIMPLE_TABS.map(([id, label]) => (
         <button key={id} className={`tab ${active === id ? 'active' : ''}`} onClick={() => onSelect(id)}>{label}</button>
       ))}
-      <button className={`tab ${active === 'layers' ? 'active' : ''}`} onClick={() => onSelect('layers')}>
-        Layers{layerCount > 0 ? ` (${layerCount})` : ''}
-      </button>
-      <button className={`tab ${active === 'emitters' ? 'active' : ''}`} onClick={() => onSelect('emitters')}>
-        Emitter Summary
-      </button>
       <button className={`tab ${active === 'savedlocs' ? 'active' : ''}`} onClick={() => onSelect('savedlocs')}>
         Saved Locations{savedCount > 0 ? ` (${savedCount})` : ''}
       </button>

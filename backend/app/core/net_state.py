@@ -1,5 +1,5 @@
 """
-Ares ATAK — network state & graceful degradation (Workstream A.3).
+Ares — network state & graceful degradation (Workstream A.3).
 
 When the box has internet, services behave as today (live NOAA SWPC space
 weather, weather APIs, Overpass building queries). When it doesn't (air-gapped /

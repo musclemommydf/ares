@@ -1,5 +1,5 @@
 """
-Ares ATAK — ATAK-plugin support routes (Workstream C).
+Ares — ATAK-plugin support routes (Workstream C).
 
 Templates:
   GET    /api/v1/atak/templates              list

@@ -1,6 +1,6 @@
 # ARES-ATAK — ATAK-CIV plugin (skeleton)
 
-ATAK plugin that turns an [Ares ATAK](../README.md) server into the propagation /
+ATAK plugin that turns an [Ares](../README.md) server into the propagation /
 geolocation backend for ATAK — the open-source counterpart to CloudRF's
 SOOTHSAYER ATAK plugin, plus Ares-exclusive DF/geolocation, MANET, interference
 and HF/space-weather tooling. See [`../docs/BUILD_PLAN.md`](../docs/BUILD_PLAN.md)

@@ -50,8 +50,8 @@ export async function getBuildings(lat, lon, radius_m = 500) {
   return data
 }
 
-export async function getTerrainGrid(lat, lon, radius_km = 5, grid_size = 30) {
-  const { data } = await api.get('/terrain/grid', { params: { lat, lon, radius_km, grid_size } })
+export async function getTerrainGrid(lat, lon, radius_km = 5, grid_size = 30, resolution) {
+  const { data } = await api.get('/terrain/grid', { params: { lat, lon, radius_km, grid_size, ...(resolution ? { resolution } : {}) } })
   return data
 }
 
@@ -264,7 +264,7 @@ export function formatDistance(m) {
   return `${m.toFixed(0)} m`
 }
 
-// ── Ares ATAK: server / offline packs / radio templates / net state ──────────
+// ── Ares: server / offline packs / radio templates / net state ──────────────
 
 export async function getServerInfo() {
   const { data } = await api.get('/server/info')
@@ -301,6 +301,31 @@ export async function verifyDataPack(packId, deep = false) {
   const { data } = await api.post(`/packs/${encodeURIComponent(packId)}/verify`, null, { params: { deep } })
   return data
 }
+export async function updateDataPack(packId, params = {}) {
+  // re-fetch a fresher version of an installed pack (manual only — never automatic)
+  const { data } = await api.post(`/packs/${encodeURIComponent(packId)}/update`, null, { params })
+  return data
+}
+
+// ── Named regions (state/country) → bbox, and "download all mapping data for it" ──
+export async function searchRegions(q, limit = 40) {
+  const { data } = await api.get('/regions', { params: { ...(q ? { q } : {}), limit } })
+  return data
+}
+export async function regionAtPoint(lat, lon) {
+  const { data } = await api.get('/regions/at', { params: { lat, lon } })
+  return data
+}
+export async function downloadRegionData(code, params = {}) {
+  // params: { layers?:[...], max_zoom?, source? } — default layers = terrain+imagery+buildings+osm+clutter
+  const { data } = await api.post(`/regions/${encodeURIComponent(code)}/download`, params)
+  return data
+}
+export async function estimateRegionDownload(code, params = {}) {
+  // returns { region, per_layer: {layer: {tiles, bytes, note, exceeds_cap?, max_zoom?}}, total_bytes, ... }
+  const { data } = await api.post(`/regions/${encodeURIComponent(code)}/estimate`, params)
+  return data
+}
 export async function setAtakEnabled(enabled)       { const { data } = await api.post('/atak/enabled', { enabled }); return data }
 
 // ── SDR / DF (Workstream D) ──────────────────────────────────────────────────
@@ -315,6 +340,10 @@ export async function setCotTargets(targets)        { const { data } = await api
 export async function pushSdrLob(payload)           { const { data } = await api.post('/sdr/lob', payload); return data }
 export async function getGpsFix()                   { const { data } = await api.get('/sdr/gps'); return data }
 export async function setGpsFix(fix)                { const { data } = await api.post('/sdr/gps', fix); return data }
+export async function getGpsSource()                { const { data } = await api.get('/sdr/gps/source'); return data }
+export async function setGpsSource(body)            { const { data } = await api.post('/sdr/gps/source', body); return data }
+export async function getDfIqBackend()              { const { data } = await api.get('/df/iq_backend'); return data }
+export async function solveAoaLive(body)            { const { data } = await api.post('/df/aoa_live', body); return data }
 export async function getSdrSpectrum(id, params={}) { const { data } = await api.get(`/sdr/devices/${encodeURIComponent(id)}/spectrum`, { params }); return data }
 export async function getDfAccuracyEstimate(params={}) { const { data } = await api.get('/sdr/accuracy_estimate', { params }); return data }
 export async function getAudioModes()               { const { data } = await api.get('/sdr/audio/modes'); return data }
@@ -376,7 +405,7 @@ export async function geolocateFix(observations, options = {}) {
   return data
 }
 
-// ── UAS video downlink scanner / decoder / exploitation (PED) ────────────────
+// ── UAS video downlink scanner / decoder / exploitation ─────────────────────
 export async function getUasFeedTypes() { const { data } = await api.get('/uas/feed_types'); return data }
 export async function getUasStatus() { const { data } = await api.get('/uas/status'); return data }
 export async function getUasDecoders() { const { data } = await api.get('/uas/decoders'); return data }

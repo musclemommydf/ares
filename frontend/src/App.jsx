@@ -10,7 +10,6 @@ import {
   Satellite, Archive, Scan, RefreshCw, Crosshair, Upload, Server, Globe,
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
   Undo2, Redo2,
-  Video,
 } from 'lucide-react'
 import AppIcon from './components/Common/AppIcon'
 import { ToastContainer, toast } from 'react-toastify'
@@ -44,7 +43,6 @@ import SpaceWxPanel from './components/Panels/SpaceWxPanel'
 import BottomPanelTabs from './components/Panels/BottomPanelTabs'
 import TerrainTab from './components/Panels/TerrainTab'
 import BottomPanelContent from './components/Panels/BottomPanelContent'
-import UasVideoPanel from './components/Tools/UasVideoPanel'
 import HelpPanel from './components/Common/HelpPanel'
 import DecibelCalculator from './components/Tools/DecibelCalculator'
 import ArchivePanel from './components/Tools/ArchivePanel'
@@ -77,7 +75,7 @@ import {
   simulateRoute, simulateMultipoint, simulateManet, simulateBestServer,
   simulateInterference, simulateSuperLayer, simulateBestSitePolygon,
   simulateRayTrace, simulateSatelliteVisibility,
-  getBuildings,
+  getBuildings, regionAtPoint,
 } from './api/client'
 import ThreeDView from './components/Charts/ThreeDView'
 
@@ -86,6 +84,16 @@ const GlobeView = lazy(() => import('./components/Map/GlobeView'))
 
 // Session restored once at module load — used to hydrate useState initial values.
 const _s = loadSession()
+
+// Turn an axios error into a readable string — flattens FastAPI 422 validation arrays
+// (`[{loc, msg, type}, ...]`) so the user sees "radius_km — Input should be ≤ 500" instead of
+// "[object Object]".
+function errDetail(err) {
+  const raw = err?.response?.data?.detail
+  if (Array.isArray(raw)) return raw.map(e => `${(e.loc || []).slice(1).join('.') || 'field'} — ${e.msg || e}`).join('; ')
+  if (raw && typeof raw === 'object') return JSON.stringify(raw)
+  return raw || err?.message || String(err)
+}
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
@@ -102,7 +110,9 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false)
   const [atakPanelOpen, setAtakPanelOpen] = useState(false)
   const [sdrPanelOpen, setSdrPanelOpen] = useState(false)
-  const [uasPanelOpen, setUasPanelOpen] = useState(false)
+  const [layersOpen, setLayersOpen] = useState(false)
+  const [layersRegionPreselect, setLayersRegionPreselect] = useState(null)   // region pre-picked from a right-click on the map
+  const [dbCalcOpen, setDbCalcOpen] = useState(false)
   // SDR / DF live state: features from the server-side solver, and the latest
   // auto-coverage GeoJSON from a confirmed fix (rendered as a faint extra layer).
   const [sdrFeatures, setSdrFeatures] = useState([])
@@ -130,7 +140,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(() => _s?.ui?.activeTab ?? 'coverage')
   const [bottomTab, setBottomTab] = useState(() => {
     const t = _s?.ui?.bottomTab
-    return (!t || t === 'mapopts') ? 'results' : t   // 'mapopts' tab removed → its options moved to the map ⚙
+    // 'mapopts' tab removed → its options moved to the map ⚙; 'dbcalc'/'layers' moved to the header
+    return (!t || t === 'mapopts' || t === 'dbcalc' || t === 'layers') ? 'results' : t
   })
 
   // ── Best site (candidates) ────────────────────────────────────────────────
@@ -159,7 +170,9 @@ export default function App() {
   const [drawMode, setDrawMode] = useState(null)
   const [drawBounds, setDrawBounds] = useState(null)    // { north, south, east, west }
   const [routeWaypoints, setRouteWaypoints] = useState([])
+  const [routeResult, setRouteResult] = useState(null)
   const [multipointTxs, setMultipointTxs] = useState([])
+  const [multipointResult, setMultipointResult] = useState(null)
   const [polygonCoords, setPolygonCoords] = useState([])
 
   // ── New tool results (stored as extra GeoJSON layers) ─────────────────────
@@ -516,14 +529,49 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo])
 
+  // Delete / Backspace removes the last-clicked map feature (imported layer or drawn feature).
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const tag = (e.target?.tagName || '').toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return
+      const sel = ul.getSelectedFeature?.()
+      if (!sel) return
+      e.preventDefault()
+      const kind = ul.removeSelected?.()
+      if (kind) toast.info(kind === 'drawn' ? 'Removed the drawn feature' : 'Removed the map layer')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [ul.getSelectedFeature, ul.removeSelected])
+
   // ── Save / Load state ─────────────────────────────────────────────────────
+  // The downloaded .json now carries the *whole* scene: emitters/receiver/propagation,
+  // saved locations, LoBs/DF, the imported KMZ/KML/GeoJSON/imagery/tiles/terrain-grid layers
+  // + drawings (via ul.exportSession), the propagation coverage + building footprints, and the
+  // analysis inputs/results (best-site, route, multipoint, MANET, best-server, BSA, P2P).
   const handleSaveState = useCallback(() => {
+    let userLayers = null
+    try { userLayers = ul.exportSession() } catch { userLayers = null }
     const state = {
-      version: '2.0', savedAt: new Date().toISOString(),
+      version: '2.1', savedAt: new Date().toISOString(),
       primaryTransmitter: tx, extraTransmitters: extraTxList,
       receiver: rx, propagation, atmosphere,
       savedLocations,
       lobs, capGroups, lobAlgorithm,
+      userLayers,
+      coverage: { geojson: coverageGeoJSON, metadata, buildings: buildingGeoJSON, warnings },
+      analyses: {
+        p2pResult, terrainProfile, radarResult,
+        bestSiteCandidates, bestSiteResult,
+        routeWaypoints, routeReceiverPoint, routeResult,
+        multipointTxs, multipointResult,
+        manetNodes, manetResult,
+        bestServerSites, bestServerQuery, bestServerResult,
+        polygonCoords, polygonBsaCoveragePct, polygonBsaResult,
+        drawBounds,
+      },
+      ui: { txLabel, activeTab, mainMode, bottomTab, coverageRaster },
     }
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -532,8 +580,13 @@ export default function App() {
     a.download = `ares-state-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     URL.revokeObjectURL(url)
-    toast.success('State saved')
-  }, [tx, extraTxList, rx, propagation, atmosphere, savedLocations, lobs, capGroups, lobAlgorithm])
+    toast.success('State saved (emitters · layers/KMZ · drawings · propagation · LoBs · analyses)')
+  }, [tx, extraTxList, rx, propagation, atmosphere, savedLocations, lobs, capGroups, lobAlgorithm,
+      ul, coverageGeoJSON, metadata, buildingGeoJSON, warnings, p2pResult, terrainProfile, radarResult,
+      bestSiteCandidates, bestSiteResult, routeWaypoints, routeReceiverPoint, routeResult,
+      multipointTxs, multipointResult, manetNodes, manetResult, bestServerSites, bestServerQuery,
+      bestServerResult, polygonCoords, polygonBsaCoveragePct, polygonBsaResult, drawBounds,
+      txLabel, activeTab, mainMode, bottomTab, coverageRaster])
 
   const handleLoadState = useCallback(() => {
     const input = document.createElement('input')
@@ -563,15 +616,52 @@ export default function App() {
             step: { ...prev.step, ...(state.lobAlgorithm.step || {}) },
             fixed: { ...prev.fixed, ...(state.lobAlgorithm.fixed || {}) },
           }))
+          // Imported KMZ/KML/GeoJSON/imagery/tiles/terrain-grid layers + drawings — v2.1+
+          if (state.userLayers) { try { ul.restoreSnapshot(state.userLayers) } catch { /* noop */ } }
+          // Propagation coverage + buildings — v2.1+
+          if (state.coverage) {
+            setCoverageGeoJSON(state.coverage.geojson ?? null)
+            setMetadata(state.coverage.metadata ?? null)
+            setBuildingGeoJSON(state.coverage.buildings ?? null)
+            setWarnings(state.coverage.warnings ?? [])
+          }
+          // Analysis inputs + results — v2.1+
+          const a = state.analyses || {}
+          if ('p2pResult' in a) setP2pResult(a.p2pResult ?? null)
+          if ('terrainProfile' in a) setTerrainProfile(a.terrainProfile ?? null)
+          if ('radarResult' in a) setRadarResult(a.radarResult ?? null)
+          if (a.bestSiteCandidates) setBestSiteCandidates(a.bestSiteCandidates)
+          if ('bestSiteResult' in a) setBestSiteResult(a.bestSiteResult ?? null)
+          if (a.routeWaypoints) setRouteWaypoints(a.routeWaypoints)
+          if ('routeReceiverPoint' in a) setRouteReceiverPoint(a.routeReceiverPoint ?? null)
+          if ('routeResult' in a) setRouteResult(a.routeResult ?? null)
+          if (a.multipointTxs) setMultipointTxs(a.multipointTxs)
+          if ('multipointResult' in a) setMultipointResult(a.multipointResult ?? null)
+          if (a.manetNodes) setManetNodes(a.manetNodes)
+          if ('manetResult' in a) setManetResult(a.manetResult ?? null)
+          if (a.bestServerSites) setBestServerSites(a.bestServerSites)
+          if ('bestServerQuery' in a) setBestServerQuery(a.bestServerQuery ?? null)
+          if ('bestServerResult' in a) setBestServerResult(a.bestServerResult ?? null)
+          if (a.polygonCoords) setPolygonCoords(a.polygonCoords)
+          if (a.polygonBsaCoveragePct != null) setPolygonBsaCoveragePct(a.polygonBsaCoveragePct)
+          if ('polygonBsaResult' in a) setPolygonBsaResult(a.polygonBsaResult ?? null)
+          if ('drawBounds' in a) setDrawBounds(a.drawBounds ?? null)
+          if (state.ui) {
+            if (state.ui.txLabel) setTxLabel(state.ui.txLabel)
+            if (state.ui.activeTab) setActiveTab(state.ui.activeTab)
+            if (state.ui.mainMode) setMainMode(state.ui.mainMode)
+            if (state.ui.bottomTab) setBottomTab(state.ui.bottomTab)
+            if (typeof state.ui.coverageRaster === 'boolean') setCoverageRaster(state.ui.coverageRaster)
+          }
           toast.success('State loaded')
-        } catch {
-          toast.error('Invalid state file')
+        } catch (err) {
+          toast.error('Invalid state file: ' + (err?.message || err))
         }
       }
       reader.readAsText(file)
     }
     input.click()
-  }, [])
+  }, [ul])
 
   // ── Multi-TX management ───────────────────────────────────────────────────
   const addTransmitter = useCallback(() => {
@@ -615,21 +705,26 @@ export default function App() {
   }, [])
 
   // ── Clear all layers ──────────────────────────────────────────────────────
-  const handleClearLayers = useCallback(() => {
-    setCoverageGeoJSON(null)
-    setMetadata(null)
-    setP2pResult(null)
-    setTerrainProfile(null)
-    setWarnings([])
-    setBestSiteResult(null)
-    setRadarResult(null)
-    setManetResult(null)
-    setPolygonBsaResult(null)
-    setBestServerResult(null)
+  // Wipes everything overlaid on the map: imported KMZ/KML/GeoJSON/imagery/tiles/imported
+  // terrain grids, drawings, propagation coverage + every analysis result/input layer, the
+  // SDR live overlay, buildings, and the LoBs / DF. (Emitters/receiver and the persistent
+  // offline data-pack library are left alone.)
+  const handleClearAll = useCallback(() => {
+    try { ul.clearAll(); ul.clearDrawn() } catch { /* noop */ }
+    setCoverageGeoJSON(null); setMetadata(null); setP2pResult(null)
+    setTerrainProfile(null); setStandaloneProfile(null); setWarnings([])
+    setBestSiteResult(null); setRadarResult(null); setManetResult(null)
+    setPolygonBsaResult(null); setBestServerResult(null); setRouteResult(null); setMultipointResult(null)
+    setBuildingGeoJSON(null)
     setExtraGeojsonLayers([])
     setExtraTxList(prev => prev.map(e => ({ ...e, geojson: null })))
-    toast.info('All layers cleared')
-  }, [])
+    setSdrFeatures([]); setSdrCoverage(null)
+    setLobs([]); setCapGroups({})
+    setBestSiteCandidates([]); setRouteWaypoints([]); setMultipointTxs([]); setManetNodes([]); setBestServerSites([]); setPolygonCoords([]); setDrawBounds(null)
+    setDrawMode(null)
+    if (ul.getSelectedFeature?.()) ul.selectFeature?.(null)
+    toast.info('Cleared all layers, drawings, results & LoBs')
+  }, [ul])
 
   // ── Coverage simulation ───────────────────────────────────────────────────
   const runCoverage = useCallback(async () => {
@@ -666,7 +761,7 @@ export default function App() {
     try {
       setProgress(20)
       const result = await (coverageRaster
-        ? simulateCoverageRaster({ transmitter: { ...tx, frequency_hz: Number(tx.frequency_hz) }, ...baseParams }, 56)
+        ? simulateCoverageRaster({ transmitter: { ...tx, frequency_hz: Number(tx.frequency_hz) }, ...baseParams }, 72)
         : simulateCoverage({ transmitter: { ...tx, frequency_hz: Number(tx.frequency_hz) }, ...baseParams }))
       setCoverageGeoJSON(result.geojson)
       setMetadata(result.metadata)
@@ -718,10 +813,7 @@ export default function App() {
       const modelLabel = resolvedModel === propagation.model ? resolvedModel : `${resolvedModel} (auto)`
       toast.success(`Coverage computed in ${result.metadata?.computation_time_s?.toFixed(1)}s — model: ${modelLabel}`)
     } catch (err) {
-      const raw = err.response?.data?.detail
-      const detail = Array.isArray(raw)
-        ? raw.map(e => `${e.loc?.slice(1).join('.')} — ${e.msg}`).join('\n')
-        : (raw || err.message)
+      const detail = errDetail(err)
       toast.error(`Simulation failed: ${detail}`, { autoClose: 10000 })
     } finally {
       setIsSimulating(false)
@@ -765,10 +857,7 @@ export default function App() {
       setProgress(100)
       setBottomTab('terrain')
     } catch (err) {
-      const raw = err.response?.data?.detail
-      const detail = Array.isArray(raw)
-        ? raw.map(e => `${e.loc?.slice(1).join('.')} — ${e.msg}`).join('\n')
-        : (raw || err.message)
+      const detail = errDetail(err)
       toast.error(`P2P failed: ${detail}`, { autoClose: 10000 })
     } finally {
       setIsSimulating(false)
@@ -793,10 +882,10 @@ export default function App() {
         receiver: rx,
         propagation_model: resolveModelFast(tx, propagation),
         wave_type: propagation.wave_type,
-        radius_km: propagation.radius_km,
+        radius_km: Math.min(propagation.radius_km || 30, 500),   // best-site endpoints cap radius at 500 km
         num_radials: Math.min(propagation.num_radials, 180),
         points_per_radial: Math.min(propagation.points_per_radial, 150),
-        min_signal_dbm: propagation.min_signal_dbm,
+        min_signal_dbm: Math.min(0, propagation.min_signal_dbm ?? -100),
         atmosphere,
         use_gpu: propagation.use_gpu,
         terrain_resolution: propagation.terrain_resolution,
@@ -806,13 +895,11 @@ export default function App() {
       setBestSiteResult(result)
       if (result.best_geojson) setCoverageGeoJSON(result.best_geojson)
       setProgress(100)
+      setBottomOpen(true); setBottomTab('results')
       const best = result.sites?.[0]
       if (best) toast.success(`Best site: ${best.label} — ${best.covered_area_km2} km² covered`)
     } catch (err) {
-      const raw = err.response?.data?.detail
-      const detail = Array.isArray(raw)
-        ? raw.map(e => `${e.loc?.slice(1).join('.')} — ${e.msg}`).join('\n')
-        : (raw || err.message)
+      const detail = errDetail(err)
       toast.error(`Best site failed: ${detail}`, { autoClose: 10000 })
     } finally {
       setIsSimulating(false)
@@ -845,10 +932,12 @@ export default function App() {
         clutter_height_m: propagation.clutter_height_m ?? 0,
       })
       upsertLayer('route', result.geojson, '#00b4d8')
+      setRouteResult(result)
       setProgress(100)
+      setBottomOpen(true); setBottomTab('results')
       toast.success(`Route analysis: ${result.geojson?.features?.filter(f => f.geometry.type === 'Point').length} waypoints processed`)
     } catch (err) {
-      toast.error('Route analysis failed: ' + (err.response?.data?.detail || err.message))
+      toast.error('Route analysis failed: ' + errDetail(err))
     } finally {
       setIsSimulating(false)
       setTimeout(() => setProgress(0), 1000)
@@ -880,10 +969,12 @@ export default function App() {
         clutter_height_m: propagation.clutter_height_m ?? 0,
       })
       upsertLayer('multipoint', result.geojson, '#f59e0b')
+      setMultipointResult(result)
       setProgress(100)
+      setBottomOpen(true); setBottomTab('results')
       toast.success(`Multipoint: ${multipointTxs.length} TX points analysed`)
     } catch (err) {
-      toast.error('Multipoint failed: ' + (err.response?.data?.detail || err.message))
+      toast.error('Multipoint failed: ' + errDetail(err))
     } finally {
       setIsSimulating(false)
       setTimeout(() => setProgress(0), 1000)
@@ -914,11 +1005,12 @@ export default function App() {
       setManetResult(result.geojson)
       upsertLayer('manet', result.geojson, '#06d6a0')
       setProgress(100)
+      setBottomOpen(true); setBottomTab('results')
       const links = result.geojson?.features?.filter(f => f.geometry.type === 'LineString') || []
       const connected = links.filter(f => f.properties?.connected).length
       toast.success(`MANET: ${connected}/${links.length} links connected`)
     } catch (err) {
-      toast.error('MANET planning failed: ' + (err.response?.data?.detail || err.message))
+      toast.error('MANET planning failed: ' + errDetail(err))
     } finally {
       setIsSimulating(false)
       setTimeout(() => setProgress(0), 1000)
@@ -960,9 +1052,10 @@ export default function App() {
       })
       setBestServerResult(result)
       setProgress(100)
+      setBottomOpen(true); setBottomTab('results')
       toast.success(`Best server: ${result.best_server?.label} at ${result.best_server?.signal_dbm} dBm`)
     } catch (err) {
-      toast.error('Best server failed: ' + (err.response?.data?.detail || err.message))
+      toast.error('Best server failed: ' + errDetail(err))
     } finally {
       setIsSimulating(false)
       setTimeout(() => setProgress(0), 1000)
@@ -985,7 +1078,7 @@ export default function App() {
       setProgress(100)
       toast.success(`Interference analysis: ${result.geojson?.features?.length} SNR points`)
     } catch (err) {
-      toast.error('Interference analysis failed: ' + (err.response?.data?.detail || err.message))
+      toast.error('Interference analysis failed: ' + errDetail(err))
     } finally {
       setIsSimulating(false)
       setTimeout(() => setProgress(0), 1000)
@@ -1011,7 +1104,7 @@ export default function App() {
       setProgress(100)
       toast.success(`Super Layer: ${result.geojson?.features?.length} merged points`)
     } catch (err) {
-      toast.error('Super Layer failed: ' + (err.response?.data?.detail || err.message))
+      toast.error('Super Layer failed: ' + errDetail(err))
     } finally {
       setIsSimulating(false)
       setTimeout(() => setProgress(0), 1000)
@@ -1035,10 +1128,10 @@ export default function App() {
         receiver: rx,
         propagation_model: resolveModelFast(tx, propagation),
         wave_type: propagation.wave_type,
-        radius_km: propagation.radius_km,
+        radius_km: Math.min(propagation.radius_km || 30, 500),   // best-site endpoints cap radius at 500 km
         num_radials: Math.min(propagation.num_radials, 180),
         points_per_radial: Math.min(propagation.points_per_radial, 150),
-        min_signal_dbm: propagation.min_signal_dbm,
+        min_signal_dbm: Math.min(0, propagation.min_signal_dbm ?? -100),
         atmosphere,
         terrain_resolution: propagation.terrain_resolution,
         context: propagation.context ?? 2,
@@ -1047,13 +1140,11 @@ export default function App() {
       setPolygonBsaResult(result)
       if (result.best_geojson) setCoverageGeoJSON(result.best_geojson)
       setProgress(100)
+      setBottomOpen(true); setBottomTab('results')
       const best = result.sites?.[0]
       if (best) toast.success(`Best polygon site: ${best.lat?.toFixed(4)}, ${best.lon?.toFixed(4)} — ${best.covered_area_km2} km²`)
     } catch (err) {
-      const raw = err.response?.data?.detail
-      const detail = Array.isArray(raw)
-        ? raw.map(e => `${e.loc?.slice(1).join('.')} — ${e.msg}`).join('\n')
-        : (raw || err.message)
+      const detail = errDetail(err)
       toast.error(`Best site polygon failed: ${detail}`, { autoClose: 10000 })
     } finally {
       setIsSimulating(false)
@@ -1069,24 +1160,24 @@ export default function App() {
       const result = await simulateRayTrace({
         tx_lat: tx.lat,
         tx_lon: tx.lon,
-        tx_height_m: tx.height_m,
-        tx_power_dbm: tx.power_dbm,
+        tx_height_m: Math.max(0, tx.height_m),
+        tx_power_dbm: Math.max(-30, Math.min(100, tx.power_dbm)),
         frequency_hz: Number(tx.frequency_hz),
         num_azimuths: 36,
         num_elevations: 5,
-        max_range_m: propagation.radius_km * 1000,
+        max_range_m: Math.max(100, Math.min(200000, (propagation.radius_km || 10) * 1000)),   // backend caps at 200 km
         num_points: 200,
         ground_material: 'average_ground',
-        vegetation_height_m: propagation.clutter_height_m ?? 0,
+        vegetation_height_m: Math.max(0, propagation.clutter_height_m ?? 0),
         building_height_m: 0,
         enable_reflections: true,
-        min_signal_dbm: propagation.min_signal_dbm,
+        min_signal_dbm: Math.min(0, propagation.min_signal_dbm ?? -120),
       })
       upsertLayer('ray_trace', result.geojson, '#f59e0b')
       setProgress(100)
       toast.success(`Ray trace: ${result.metadata?.num_paths} paths in ${result.metadata?.computation_s}s`)
     } catch (err) {
-      toast.error('Ray trace failed: ' + (err.response?.data?.detail || err.message))
+      toast.error('Ray trace failed: ' + errDetail(err))
     } finally {
       setIsSimulating(false)
       setTimeout(() => setProgress(0), 1000)
@@ -1199,17 +1290,15 @@ export default function App() {
         <HeaderActions
           gpuActive={propagation.use_gpu}
           mainMode={mainMode}
-          activeTab={activeTab}
-          coverageRaster={coverageRaster}
-          onSetRaster={setCoverageRaster}
           isSimulating={isSimulating}
           progress={progress}
           txActive={txActive}
           sdrActive={!!(sdrFeatures.length || sdrCoverage)}
-          onClear={() => { if (mainMode === 'geolocation') { setLobs([]); setCapGroups({}) } else { handleClearLayers() } }}
+          onClear={handleClearAll}
+          onOpenLayers={() => setLayersOpen(true)}
           onOpenAtak={() => setAtakPanelOpen(true)}
           onOpenSdr={() => setSdrPanelOpen(true)}
-          onOpenUas={() => setUasPanelOpen(true)}
+          onOpenDbCalc={() => setDbCalcOpen(true)}
           onRun={runSimulation}
         />
       </header>
@@ -1225,13 +1314,25 @@ export default function App() {
         archiveOpen={archiveOpen} onCloseArchive={() => setArchiveOpen(false)}
         currentGeojson={currentGeojsonForArchive} currentParams={currentParamsForArchive} onArchiveLoad={handleArchiveLoad}
       />
-      {uasPanelOpen && (
-        <UasVideoPanel
-          onClose={() => setUasPanelOpen(false)}
-          mapCenter={{ lat: tx.lat, lon: tx.lon }}
-          onLoadGeoJSON={(name, fc) => ul.addGeoJSONLayer(fc, { name })}
-          onLocate={(lat, lon) => setRxPoint({ lat, lon })}
-        />
+      {dbCalcOpen && <DecibelCalculator onClose={() => setDbCalcOpen(false)} />}
+      {layersOpen && (
+        <div onClick={() => setLayersOpen(false)}
+             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 2000,
+                      display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '4vh 20px' }}>
+          <div onClick={e => e.stopPropagation()}
+               style={{ background: '#0d1117', border: '1px solid #30363d', borderRadius: 8, width: 760, maxWidth: '100%',
+                        height: 'min(86vh, 820px)', color: '#e6edf3', boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
+                        display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', borderBottom: '1px solid #21262d', flexShrink: 0 }}>
+              <h3 style={{ margin: 0, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}><Layers size={16} /> Layers</h3>
+              <button className="btn btn-ghost" style={{ padding: '2px 6px' }} onClick={() => setLayersOpen(false)}><X size={14} /></button>
+            </div>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <LayerManagerPanel ul={ul} openFileDialog={() => mapImportApiRef.current?.openFileDialog?.()}
+                regionPreselect={layersRegionPreselect} onConsumeRegionPreselect={() => setLayersRegionPreselect(null)} />
+            </div>
+          </div>
+        </div>
       )}
 
 
@@ -1303,6 +1404,9 @@ export default function App() {
           setPropagation={setPropagation}
           resolvedModel={resolveModelFast(tx, propagation)}
           distUnit={distUnit}
+          activeTab={activeTab}
+          coverageRaster={coverageRaster}
+          onSetRaster={setCoverageRaster}
         />
         <AntennaPanel tx={tx} setTx={setTx} rx={rx} setRx={setRx} txFrequencyHz={tx.frequency_hz} />
         <AtmospherePanel atmosphere={atmosphere} setAtmosphere={setAtmosphere} txLat={tx.lat} txLon={tx.lon} />
@@ -1331,7 +1435,6 @@ export default function App() {
         {activeTab === 'best_site' && (
           <BestSiteSidebar
             candidates={bestSiteCandidates}
-            result={bestSiteResult}
             onRemove={(i) => setBestSiteCandidates(prev => prev.filter((_, j) => j !== i))}
             onAddFromTx={() => setBestSiteCandidates(prev => [
               ...prev,
@@ -1380,14 +1483,13 @@ export default function App() {
             onUpdateNode={(nodeId, updates) => setManetNodes(prev =>
               prev.map(n => n.id === nodeId ? { ...n, ...updates } : n)
             )}
-            result={manetResult}
             isSimulating={isSimulating}
           />
         )}
 
         {/* Best server */}
         {activeTab === 'best_server' && (
-          <BestServerSidebar query={bestServerQuery} result={bestServerResult} onClearQuery={() => setBestServerQuery(null)} />
+          <BestServerSidebar query={bestServerQuery} onClearQuery={() => setBestServerQuery(null)} />
         )}
 
         {/* Best Site Polygon */}
@@ -1396,7 +1498,6 @@ export default function App() {
             drawMode={drawMode}
             polygonCoords={polygonCoords}
             coveragePct={polygonBsaCoveragePct}
-            result={polygonBsaResult}
             onToggleDraw={() => setDrawMode(m => m === 'polygon' ? null : 'polygon')}
             onClearPolygon={() => { setPolygonCoords([]); setDrawMode(null) }}
             onSetCoveragePct={setPolygonBsaCoveragePct}
@@ -1517,6 +1618,8 @@ export default function App() {
           drawMode={drawMode}
           onDrawComplete={handleDrawComplete}
           extraGeojsonLayers={extraGeojsonLayersWithSdr}
+          bestSiteCandidates={activeTab === 'best_site' ? bestSiteCandidates : []}
+          bestSiteResult={activeTab === 'best_site' ? bestSiteResult : null}
           lobs={lobs}
           lobGroups={lobGroups}
           capGroups={capGroups}
@@ -1527,6 +1630,14 @@ export default function App() {
           onAddEmitter={handleAddEmitter}
           onAddLoBObserver={handleAddLoBObserver}
           onAddLoBAzimuthTarget={handleAddLoBAzimuthTarget}
+          onDownloadRegionAt={async (lat, lon) => {
+            try {
+              const r = await regionAtPoint(lat, lon)
+              setLayersRegionPreselect(r); setLayersOpen(true)
+            } catch {
+              toast.info('No catalogued region contains that point — open the Layer Manager and search by name instead')
+            }
+          }}
           showCompassRose={showCompassRose} setShowCompassRose={setShowCompassRose}
           mapBrightness={mapBrightness} setMapBrightness={setMapBrightness}
           flyToTarget={flyToTarget}
@@ -1556,7 +1667,6 @@ export default function App() {
         <BottomPanelTabs
           active={bottomTab}
           onSelect={setBottomTab}
-          layerCount={ul.layers.length + ul.drawnFeatures.length}
           savedCount={savedLocations.length}
           spaceWeather={spaceWeather}
           onClose={() => setBottomOpen(false)}
@@ -1565,13 +1675,14 @@ export default function App() {
         <BottomPanelContent
           active={bottomTab}
           metadata={metadata} p2pResult={p2pResult} warnings={warnings} activeTab={activeTab}
+          analysisResults={{ bestSiteResult, bestSiteCandidates, routeResult, multipointResult, manetResult, bestServerResult, bsaPolygonResult: polygonBsaResult }}
           onChatLocate={(lat, lon) => setRxPoint({ lat, lon })}
           terrain={{
             terrainLineMode, standaloneProfile, standaloneProfileLoading, standaloneProfileError, terrainProfile,
             onToggleLineMode: () => setTerrainLineMode(m => !m),
             onClearStandalone: () => setStandaloneProfile(null),
           }}
-          ul={ul} openFileDialog={() => mapImportApiRef.current?.openFileDialog?.()}
+          ul={ul}
           terrainGrid={terrainGrid} terrainGridLoading={terrainGridLoading} coverageGeoJSON={coverageGeoJSON} buildingGeoJSON={buildingGeoJSON}
           txActive={txActive} txLabel={txLabel} extraTxList={extraTxList} lobs={lobs} lobGroups={lobGroups}
           onRemoveLoB={handleRemoveLoB} onEditLoB={(lob) => { setMainMode('geolocation'); setEditLobRequestId(lob.id) }}

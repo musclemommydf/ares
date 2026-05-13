@@ -623,14 +623,24 @@ async def terrain_grid(
     lon: float = Query(..., ge=-180, le=180),
     radius_km: float = Query(5.0, ge=0.5, le=100),
     grid_size: int = Query(30, ge=5, le=60),
+    resolution: str = Query("srtm3", pattern="^(srtm1|srtm3)$"),
 ):
     """
-    Return a 2D elevation grid around (lat, lon) for 3D terrain rendering.
-    grid_size × grid_size points covering ±radius_km from centre.
+    Return a 2D elevation grid around (lat, lon) for 3D terrain rendering — the real terrain
+    (SRTM, or a covering offline pack). grid_size × grid_size points covering ±radius_km from
+    centre. Adds `flat: true` when no terrain source was reachable (all-zero grid) so the
+    client can say so rather than imply the area is genuinely flat.
     """
-    terrain = TerrainManager()
+    terrain = TerrainManager(resolution=resolution)
     try:
         grid = await terrain.get_elevation_grid(lat, lon, radius_km, grid_size)
+        try:
+            rows = grid.get("elevations") or []
+            flat_vals = [v for r in rows for v in r]
+            grid["flat"] = bool(flat_vals) and (max(flat_vals) - min(flat_vals) < 1.0)
+            grid["resolution"] = resolution
+        except Exception:
+            pass
         return grid
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -2040,6 +2050,49 @@ _ANTENNA_PRESETS = [
      "peak_gain_dbi": 18.0, "polar_pattern": "sector_60",
      "polarization": "linear", "antenna_type": "sector_60",
      "notes": "Tight-sector 5 GHz panel, ~18 dBi."},
+
+    # ── Furuno marine / surface-search radar antennas ──────────────────
+    # Slotted-waveguide arrays for Furuno X-band (9.3–9.5 GHz) and S-band
+    # (2.9–3.1 GHz) radars. Marine radar antennas radiate a horizontally
+    # polarised narrow azimuth "fan" beam (the antenna rotates to sweep it);
+    # gains/beamwidths are nominal datasheet figures (FAR-15xx/21xx/2xx7,
+    # NavNet DRS series). Horizontal beamwidth narrows with array length.
+    {"id": "furuno_xn12af_4", "manufacturer": "Furuno", "model": "XN12AF/4 (4 ft open array)",
+     "label": "Furuno XN12AF/4 — 4 ft X-band open array (~1.9° HBW)", "category": "Marine radar",
+     "freq_min_hz": 9.3e9, "freq_max_hz": 9.5e9,
+     "peak_gain_dbi": 25.0, "polar_pattern": "marine_radar_fan",
+     "polarization": "horizontal", "antenna_type": "phased_array",
+     "notes": "4-foot slotted-waveguide open array, X-band 9410 MHz. ~1.9° horizontal × ~20° vertical fan beam, ~25 dBi. Used on FAR-15xx/21xx and DRS6A X-Class."},
+    {"id": "furuno_xn13af_6", "manufacturer": "Furuno", "model": "XN13AF/6 (6.5 ft open array)",
+     "label": "Furuno XN13AF/6 — 6.5 ft X-band open array (~1.23° HBW)", "category": "Marine radar",
+     "freq_min_hz": 9.3e9, "freq_max_hz": 9.5e9,
+     "peak_gain_dbi": 28.0, "polar_pattern": "marine_radar_fan",
+     "polarization": "horizontal", "antenna_type": "phased_array",
+     "notes": "6.5-foot slotted-waveguide open array, X-band. ~1.23° horizontal × ~20° vertical fan beam, ~28 dBi."},
+    {"id": "furuno_xn20af_8", "manufacturer": "Furuno", "model": "XN20AF/8 (8 ft open array)",
+     "label": "Furuno XN20AF/8 — 8 ft X-band open array (~0.95° HBW)", "category": "Marine radar",
+     "freq_min_hz": 9.3e9, "freq_max_hz": 9.5e9,
+     "peak_gain_dbi": 30.0, "polar_pattern": "marine_radar_fan",
+     "polarization": "horizontal", "antenna_type": "phased_array",
+     "notes": "8-foot slotted-waveguide open array, X-band. ~0.95° horizontal × ~20° vertical fan beam, ~30 dBi — high-resolution commercial/IMO installs."},
+    {"id": "furuno_xn24af_12s", "manufacturer": "Furuno", "model": "XN24AF/12 (12 ft S-band open array)",
+     "label": "Furuno XN24AF/12 — 12 ft S-band open array (~1.8° HBW)", "category": "Marine radar",
+     "freq_min_hz": 2.9e9, "freq_max_hz": 3.1e9,
+     "peak_gain_dbi": 28.0, "polar_pattern": "marine_radar_fan",
+     "polarization": "horizontal", "antenna_type": "phased_array",
+     "notes": "12-foot S-band (3050 MHz) slotted-waveguide open array for FAR-2xx7 S-band radars. ~1.8° horizontal × ~25° vertical fan beam, ~28 dBi — long-range / heavy-weather."},
+    {"id": "furuno_drs4d_radome", "manufacturer": "Furuno", "model": "DRS4D-NXT / RSB-0070 (18\" radome)",
+     "label": "Furuno DRS4D-NXT — 18\" X-band radome (~5.2° HBW)", "category": "Marine radar",
+     "freq_min_hz": 9.3e9, "freq_max_hz": 9.5e9,
+     "peak_gain_dbi": 24.0, "polar_pattern": "marine_radar_fan_wide",
+     "polarization": "horizontal", "antenna_type": "phased_array",
+     "notes": "NavNet 18-inch enclosed (radome) solid-state Doppler radar antenna. ~5.2° horizontal × ~25° vertical fan beam, ~24 dBi — common on yachts/small craft."},
+    {"id": "furuno_drs6anxt_radome", "manufacturer": "Furuno", "model": "DRS6A-NXT / RSB-0094 (24\" radome)",
+     "label": "Furuno DRS6A-NXT — 24\" X-band radome (~3.9° HBW)", "category": "Marine radar",
+     "freq_min_hz": 9.3e9, "freq_max_hz": 9.5e9,
+     "peak_gain_dbi": 26.0, "polar_pattern": "marine_radar_fan_wide",
+     "polarization": "horizontal", "antenna_type": "phased_array",
+     "notes": "NavNet 24-inch enclosed (radome) solid-state Doppler radar antenna. ~3.9° horizontal × ~25° vertical fan beam, ~26 dBi."},
 ]
 
 

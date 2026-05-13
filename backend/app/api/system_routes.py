@@ -1,5 +1,5 @@
 """
-Ares ATAK — system, data-pack & network-state routes (Workstream A).
+Ares — system, data-pack & network-state routes (Workstream A).
 
 GET    /api/v1/server/info             server identity, GPU, installed packs, online/offline, disk
 GET    /api/v1/packs                   list installed offline data packs (optionally ?layer=terrain)
@@ -27,6 +27,7 @@ from app.config import settings, DATA_DIR, PACK_LAYERS
 from app.core import packs as packs_mod
 from app.core import net_state
 from app.core.auth import require_auth
+from app.core.security import audit
 
 router = APIRouter(tags=["system"])
 
@@ -189,6 +190,14 @@ class PackDownloadRequest(BaseModel):
     source: Optional[str] = None            # explicit tile-server / Overpass / provider URL (recommended for large jobs)
 
 
+def _kick_pack_jobs(jobs):
+    """Start the in-process background tasks for queued pack jobs."""
+    from app.core import pack_builder
+    for j in jobs:
+        if isinstance(j, dict) and j.get("status") == "queued":
+            asyncio.create_task(pack_builder.run_job(j))
+
+
 @router.post("/packs/download")
 async def download_pack(req: PackDownloadRequest, principal: dict = Depends(require_auth)):
     try:
@@ -196,11 +205,96 @@ async def download_pack(req: PackDownloadRequest, principal: dict = Depends(requ
                                        max_zoom=req.max_zoom, source=req.source)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    if job.get("status") == "queued":
-        # in-process background task; progress on the job record (GET /packs/jobs/{id})
-        from app.core import pack_builder
-        asyncio.create_task(pack_builder.run_job(job))
+    _kick_pack_jobs([job])
     return job
+
+
+# ── /regions — named state/country/region → bbox, and "download all data for it" ─────
+@router.get("/regions")
+async def list_regions(q: Optional[str] = Query(None, description="search (name / code / country)"),
+                       limit: int = Query(40, ge=1, le=400)):
+    """The catalogue of named admin regions (US states, European/other countries, and the giant
+    countries split into sub-regions). With `q`, a fuzzy search; without it, the head of the list."""
+    from app.core import regions
+    return {"regions": regions.search(q, limit=limit) if q else regions.all_regions()[:limit],
+            "total": len(regions.CATALOG)}
+
+
+@router.get("/regions/at")
+async def region_at(lat: float = Query(..., ge=-90, le=90), lon: float = Query(..., ge=-180, le=180)):
+    """The smallest catalogued region whose bbox contains the point — for the map's right-click
+    "download mapping data for this region"."""
+    from app.core import regions
+    r = regions.region_at(lat, lon)
+    if r is None:
+        raise HTTPException(404, "no catalogued region contains that point")
+    return r
+
+
+class RegionDownloadRequest(BaseModel):
+    layers: list[str] = ["terrain", "imagery", "buildings", "osm", "clutter"]   # imagery + DTED + clutter, by default
+    max_zoom: Optional[int] = None                                              # imagery/osm street zoom (default 15 imagery / 12 osm)
+    source: Optional[str] = None                                                # explicit tile-server / Overpass URL
+
+
+@router.post("/regions/{code}/estimate")
+async def estimate_region(code: str, req: RegionDownloadRequest, principal: dict = Depends(require_auth)):
+    """Estimate the download size, per layer, for a region pack request — *without* fetching
+    anything. Drives the "Get download estimate" button in the Layer Manager so the user sees
+    each item's size before committing to the download."""
+    from app.core import regions, pack_builder
+    region = regions.get_region(code)
+    if region is None:
+        raise HTTPException(404, f"no such region {code!r}")
+    est = pack_builder.estimate_bytes(req.layers, region["bbox"], req.max_zoom)
+    return {"region": region, **est, "layers": req.layers, "max_zoom": req.max_zoom}
+
+
+@router.post("/regions/{code}/download")
+async def download_region(code: str, req: RegionDownloadRequest, principal: dict = Depends(require_auth)):
+    """Stage the offline data packs (imagery / DTED terrain / clutter / OSM buildings) for a named
+    region into the persistent pack library. Runs in the background; one job per buildable layer —
+    poll GET /packs/jobs. Imagery at street zoom over a big region is large; the region split keeps
+    each pack practical (a whole-country box would be impractical — pick a sub-region for those)."""
+    from app.core import regions
+    region = regions.get_region(code)
+    if region is None:
+        raise HTTPException(404, f"no such region {code!r}")
+    bbox = region["bbox"]
+    jobs = []
+    for layer in req.layers:
+        try:
+            job = packs_mod.start_download(layers=[layer], bbox=bbox, fidelity="best",
+                                           max_zoom=req.max_zoom, source=req.source)
+            job["region"] = {"code": region["code"], "name": region["name"]}
+            jobs.append(job)
+        except ValueError as e:
+            jobs.append({"layer": layer, "status": "error", "detail": str(e)})
+    _kick_pack_jobs(jobs)
+    audit("packs.region_download", region=code, layers=req.layers)
+    return {"region": region, "jobs": jobs,
+            "note": "data lands in the persistent pack library (survives sessions); re-fetch later with POST /packs/{id}/update — manual only, never automatic"}
+
+
+@router.post("/packs/{pack_id}/update")
+async def update_pack(pack_id: str, max_zoom: Optional[int] = Query(None), source: Optional[str] = Query(None),
+                      principal: dict = Depends(require_auth)):
+    """Manually re-fetch a fresher version of an installed pack — re-runs the download for the same
+    layer + bbox. There is no automatic/background refresh; this endpoint is the only way to update.
+    The new pack is added to the library; delete the stale one when you're satisfied (DELETE /packs/{id})."""
+    pack = packs_mod.get_pack(pack_id)
+    if pack is None:
+        raise HTTPException(404, "no such pack")
+    layer = pack.get("layer")
+    bbox = pack.get("bbox")
+    try:
+        job = packs_mod.start_download(layers=[layer], bbox=bbox, fidelity="best",
+                                       max_zoom=max_zoom or pack.get("max_zoom"), source=source or pack.get("source"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _kick_pack_jobs([job])
+    audit("packs.update", pack=pack_id, layer=layer)
+    return {"updating": pack_id, "layer": layer, "bbox": bbox, "job": job}
 
 
 # ── /terrain/heightmap — feeds the 3D globe's CustomHeightmapTerrainProvider ──

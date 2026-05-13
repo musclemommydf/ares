@@ -4,7 +4,7 @@
  * resolves correctly (not as file:// which silently fails).
  * Also spawns the Python backend and proxies /api + /ws to port 8000.
  */
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require('electron')
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, nativeTheme } = require('electron')
 const path = require('path')
 const { spawn, execSync } = require('child_process')
 const http  = require('http')
@@ -381,6 +381,10 @@ function buildMenu() {
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  // Force dark mode for all native chrome — including the OS open-file dialog used
+  // when loading a KMZ/KML (on Linux this makes the GTK file picker honour a dark theme).
+  try { nativeTheme.themeSource = 'dark' } catch (_) {}
+
   // Identify the app to the desktop environment so the dock/taskbar
   // shows the correct icon and groups windows properly.
   app.setName('Ares')

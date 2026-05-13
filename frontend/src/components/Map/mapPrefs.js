@@ -45,8 +45,10 @@ export const useMapPrefs = create((set) => ({
   basemapId: 'dark',                          // key into BASEMAPS
   mapColors: DEFAULT_MAP_COLORS,
   coverageMode: 'auto',                       // 'auto' | 'raster' | 'points'  (globe coverage rendering)
+  coverageHeight: 'beam',                     // 'ground' (clamp to terrain) | 'beam' (extrude at the antenna beam-height midpoint)
   setBasemapId: (id) => set({ basemapId: id }),
   setMapColors: (mc) => set((s) => ({ mapColors: typeof mc === 'function' ? mc(s.mapColors) : mc })),
   resetMapColors: () => set({ mapColors: DEFAULT_MAP_COLORS }),
   setCoverageMode: (m) => set({ coverageMode: m }),
+  setCoverageHeight: (h) => set({ coverageHeight: h }),
 }))

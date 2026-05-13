@@ -1,12 +1,11 @@
 import { X, Plus } from 'lucide-react'
 
 /**
- * The sidebar control for the Best-Site tab: the list of candidate sites (each
- * showing its covered-area once a result is in), an "Add from TX" button, and the
- * ranking once Best-Site has run. App owns the candidate list + the TX it offsets
- * the new candidate from.
+ * Sidebar inputs for the Best-Site tab: the list of candidate sites (drop them by clicking the
+ * map, or "Add from TX") and the remove buttons. The *result* — the ranking — is rendered in the
+ * bottom Results tab (see <AnalysisResults>), not here.
  */
-export default function BestSiteSidebar({ candidates, result, onRemove, onAddFromTx }) {
+export default function BestSiteSidebar({ candidates, onRemove, onAddFromTx }) {
   return (
     <div style={{ borderTop: '1px solid #21262d', padding: '8px 12px' }}>
       <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8 }}>CANDIDATE SITES</div>
@@ -26,10 +25,6 @@ export default function BestSiteSidebar({ candidates, result, onRemove, onAddFro
             {c.label || `Site ${i + 1}`}
             <span style={{ color: '#444d56', marginLeft: 4 }}>{c.lat.toFixed(4)}, {c.lon.toFixed(4)}</span>
           </div>
-          {result?.sites && (() => {
-            const s = result.sites.find(s => Math.abs(s.lat - c.lat) < 0.0001)
-            return s ? <span style={{ fontSize: 10, color: '#06d6a0' }}>{s.covered_area_km2} km²</span> : null
-          })()}
           <button className="btn btn-ghost" style={{ padding: '1px 4px', color: '#ef4444' }} onClick={() => onRemove(i)}>
             <X size={11} />
           </button>
@@ -38,20 +33,7 @@ export default function BestSiteSidebar({ candidates, result, onRemove, onAddFro
       <button className="btn btn-secondary" style={{ width: '100%', gap: 6, fontSize: 11, marginTop: 4 }} onClick={onAddFromTx}>
         <Plus size={12} /> Add from TX
       </button>
-      {result?.sites && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 4 }}>RANKING</div>
-          {result.sites.map((s, i) => (
-            <div key={i} style={{
-              display: 'flex', justifyContent: 'space-between',
-              fontSize: 11, padding: '2px 0', borderBottom: '1px solid #21262d',
-            }}>
-              <span style={{ color: i === 0 ? '#06d6a0' : '#c9d1d9' }}>{i + 1}. {s.label}</span>
-              <span style={{ color: '#8b949e' }}>{s.covered_area_km2} km² · {s.avg_signal_dbm} dBm</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <div style={{ fontSize: 10, color: '#484f58', marginTop: 6 }}>Run Simulation → ranking shows in the bottom <strong>Results</strong> tab.</div>
     </div>
   )
 }
