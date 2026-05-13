@@ -2,24 +2,19 @@
  * AtakServerPanel — the "ATAK / Server" console (Workstream A/C).
  *
  * A modal opened from the header (the server/antenna button next to Run). Shows:
- *   - server identity / GPU / online-offline / disk  (GET /api/v1/server/info)
- *   - offline data packs: terrain / osm / buildings / clutter / imagery, with a
- *     "download region pack" form (POST /api/v1/packs/download) and a job poller
+ *   - server identity / GPU / online-offline / disk (GET /api/v1/server/info)
+ *   - Cursor-on-Target push targets (UDP / TCP / TLS to ATAK / WinTAK / TAK Server)
  *   - radio templates available to the ATAK plugin (GET /api/v1/atak/templates)
- *   - a note on connecting an ATAK device to this server.
  *
- * This is the web/desktop counterpart of the ATAK plugin's Settings tab — the
- * offline-ops console. (When the frontend is served by the same Ares process,
- * "server" = this backend; a remote-server picker can be added later.)
+ * Offline data packs (download form + library + verify) used to live here too. They were
+ * moved to the Layer Manager — the region/cell picker and right-click "download this region"
+ * make that the natural home; the bbox-draw shortcut was migrated along with them.
  */
 import { useEffect, useState, useCallback } from 'react'
-import { X, RefreshCw, Download, Trash2, HardDrive, Wifi, WifiOff, Cpu, Radio, Square, ShieldCheck } from 'lucide-react'
+import { X, RefreshCw, HardDrive, Wifi, WifiOff, Cpu, Radio } from 'lucide-react'
 import {
-  getServerInfo, getNetStatus, listDataPacks, downloadDataPack, listPackJobs,
-  deleteDataPack, verifyDataPack, listAtakTemplates, setAtakEnabled, getCotTargets, setCotTargets,
+  getServerInfo, getNetStatus, listAtakTemplates, setAtakEnabled, getCotTargets, setCotTargets,
 } from '../../api/client'
-
-const PACK_LAYERS = ['terrain', 'osm', 'buildings', 'clutter', 'imagery']
 
 function fmtBytes(n) {
   if (!n && n !== 0) return '—'
@@ -44,19 +39,12 @@ function Section({ title, right, children }) {
 const inputStyle = { background: '#0d1117', border: '1px solid #30363d', borderRadius: 4, color: '#e6edf3', fontSize: 12, padding: '5px 7px' }
 const btn = { display: 'inline-flex', alignItems: 'center', gap: 5, background: '#161b22', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 5, fontSize: 12, padding: '5px 9px', cursor: 'pointer' }
 
-export default function AtakServerPanel({ onClose, mapCenter, incomingBbox, onRequestDrawBbox }) {
+export default function AtakServerPanel({ onClose }) {
   const [info, setInfo] = useState(null)
   const [net, setNet] = useState(null)
-  const [packs, setPacks] = useState([])
-  const [jobs, setJobs] = useState([])
   const [templates, setTemplates] = useState([])
   const [busy, setBusy] = useState(false)
   const [errText, setErrText] = useState(null)
-  // download form
-  const [dlLayer, setDlLayer] = useState('terrain')
-  const [bbox, setBbox] = useState({ w: '', s: '', e: '', n: '' })
-  const [maxZoom, setMaxZoom] = useState(12)
-  const [fullPlanet, setFullPlanet] = useState(false)
   // CoT push targets (the ATAK / TAK-server option set lives here)
   const [cotTargets, setCotTargetsState] = useState([])
   const [cotInput, setCotInput] = useState('')
@@ -75,69 +63,17 @@ export default function AtakServerPanel({ onClose, mapCenter, incomingBbox, onRe
   const refresh = useCallback(async () => {
     setBusy(true); setErrText(null)
     try {
-      const [i, n, p, j, t] = await Promise.allSettled([
-        getServerInfo(), getNetStatus(), listDataPacks(), listPackJobs(), listAtakTemplates(),
+      const [i, n, t] = await Promise.allSettled([
+        getServerInfo(), getNetStatus(), listAtakTemplates(),
       ])
       if (i.status === 'fulfilled') setInfo(i.value)
       if (n.status === 'fulfilled') setNet(n.value)
-      if (p.status === 'fulfilled') setPacks(p.value.packs || [])
-      if (j.status === 'fulfilled') setJobs(j.value.jobs || [])
       if (t.status === 'fulfilled') setTemplates(t.value.templates || [])
       if (i.status === 'rejected') setErrText(String(i.reason?.message || i.reason))
     } finally { setBusy(false) }
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
-  // a bbox drawn on the map (via "Draw on map") arrives here → pre-fill the form
-  useEffect(() => {
-    if (incomingBbox && incomingBbox.length === 4) {
-      const [w, s, e, n] = incomingBbox
-      setBbox({ w: w.toFixed(4), s: s.toFixed(4), e: e.toFixed(4), n: n.toFixed(4) })
-      setFullPlanet(false)
-    }
-  }, [incomingBbox])
-  // poll jobs while any is running
-  useEffect(() => {
-    if (!jobs.some(j => j.status === 'queued' || j.status === 'running')) return
-    const t = setInterval(async () => {
-      try { setJobs((await listPackJobs()).jobs || []) } catch { /* ignore */ }
-    }, 3000)
-    return () => clearInterval(t)
-  }, [jobs])
-
-  const useMapBbox = () => {
-    if (!mapCenter) return
-    // a ~1°×1° box around the current map center
-    const { lat, lon } = mapCenter
-    setBbox({ w: (lon - 0.5).toFixed(3), s: (lat - 0.5).toFixed(3), e: (lon + 0.5).toFixed(3), n: (lat + 0.5).toFixed(3) })
-  }
-
-  const submitDownload = async () => {
-    setErrText(null)
-    let bb = null
-    if (!fullPlanet) {
-      const w = parseFloat(bbox.w), s = parseFloat(bbox.s), e = parseFloat(bbox.e), n = parseFloat(bbox.n)
-      if ([w, s, e, n].some(isNaN)) { setErrText('Enter a bounding box (or tick "whole planet").'); return }
-      bb = [w, s, e, n]
-    }
-    try {
-      await downloadDataPack({ layers: [dlLayer], bbox: bb, ...((dlLayer === 'osm' || dlLayer === 'imagery') ? { max_zoom: Number(maxZoom) } : {}) })
-      setJobs((await listPackJobs()).jobs || [])
-    } catch (err) { setErrText(String(err?.response?.data?.detail || err?.message || err)) }
-  }
-
-  const removePack = async (id) => {
-    try { await deleteDataPack(id); setPacks(p => p.filter(x => x.id !== id)) } catch (err) { setErrText(String(err?.message || err)) }
-  }
-
-  const checkPack = async (id) => {
-    setErrText(null)
-    try {
-      const r = await verifyDataPack(id, false)
-      setErrText(r.ok ? `✓ ${id}: ok — ${r.file_count} files, ${fmtBytes(r.size_bytes_on_disk)}, v${r.pack_version}`
-                       : `⚠ ${id}: ${r.issues.join('; ')}`)
-    } catch (err) { setErrText(String(err?.response?.data?.detail || err?.message || err)) }
-  }
 
   const online = info?.online
   return (
@@ -199,62 +135,78 @@ export default function AtakServerPanel({ onClose, mapCenter, incomingBbox, onRe
           {cotTargets.length > 0 && <div style={{ fontSize: 11, color: '#6e7681', marginTop: 4 }}>active: {cotTargets.join(', ')}</div>}
         </Section>
 
-        {/* Data packs */}
-        <Section title="Offline data packs">
-          {packs.length === 0 ? <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 8 }}>No packs installed yet.</div> : (
-            <div style={{ marginBottom: 10 }}>
-              {packs.map(p => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#c9d1d9', padding: '4px 0', borderBottom: '1px solid #21262d' }}>
-                  <span style={{ background: '#1f2937', color: '#9ca3af', borderRadius: 3, padding: '1px 5px', fontSize: 10, textTransform: 'uppercase' }}>{p.layer}</span>
-                  <span style={{ flex: 1 }}>{p.name}</span>
-                  <span style={{ color: '#6e7681' }}>{fmtBytes(p.size_bytes_on_disk ?? p.size_bytes)}</span>
-                  <button style={{ ...btn, padding: '2px 6px' }} title="Verify pack integrity / version" onClick={() => checkPack(p.id)}><ShieldCheck size={12} color="#3fb950" /></button>
-                  <button style={{ ...btn, padding: '2px 6px' }} title="Delete pack" onClick={() => removePack(p.id)}><Trash2 size={12} color="#f85149" /></button>
-                </div>
-              ))}
-            </div>
-          )}
-          {/* download form */}
-          <div style={{ background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, padding: 10, fontSize: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-              <span style={{ color: '#8b949e' }}>Download:</span>
-              <select value={dlLayer} onChange={e => setDlLayer(e.target.value)} style={inputStyle}>
-                {PACK_LAYERS.map(l => <option key={l} value={l}>{l}</option>)}
-              </select>
-              {(dlLayer === 'osm' || dlLayer === 'imagery') && <label style={{ color: '#8b949e' }}>max zoom <input type="number" min={0} max={19} value={maxZoom} onChange={e => setMaxZoom(e.target.value)} style={{ ...inputStyle, width: 52 }} /></label>}
-              <label style={{ color: '#8b949e', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <input type="checkbox" checked={fullPlanet} onChange={e => setFullPlanet(e.target.checked)} /> whole planet
-              </label>
-            </div>
-            {!fullPlanet && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-                <span style={{ color: '#8b949e' }}>bbox:</span>
-                {['w', 's', 'e', 'n'].map(k => (
-                  <input key={k} placeholder={k} value={bbox[k]} onChange={e => setBbox(b => ({ ...b, [k]: e.target.value }))} style={{ ...inputStyle, width: 78 }} />
-                ))}
-                {onRequestDrawBbox && (
-                  <button style={{ ...btn, padding: '3px 7px' }} onClick={onRequestDrawBbox} title="Close this dialog and draw a rectangle on the map">
-                    <Square size={12} /> Draw on map
-                  </button>
-                )}
-                <button style={{ ...btn, padding: '3px 7px' }} onClick={useMapBbox} disabled={!mapCenter}>≈1° around map center</button>
+        {/* How to connect ATAK */}
+        <Section title="Connect an ATAK device to Ares">
+          <div style={{ fontSize: 12, color: '#c9d1d9', lineHeight: 1.55 }}>
+            <p style={{ margin: '0 0 8px' }}>
+              The standalone ATAK plugin is tak.gov-SDK-blocked, but Ares can already push everything it produces
+              (LoBs, emitter fixes, GeoChat, KMZ coverage) into ATAK via <b>Cursor-on-Target</b> — that's the standard
+              ATAK input format. Pick the path that matches your network:
+            </p>
+
+            <div style={{ background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, padding: '8px 10px', marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#3fb950', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+                A · Same Wi-Fi / hotspot · default multicast (easiest)
               </div>
-            )}
-            <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} onClick={submitDownload}><Download size={13} /> Download pack</button>
-            <div style={{ color: '#6e7681', fontSize: 10, marginTop: 6 }}>
-              terrain = SRTM30 .hgt (≈26 MB / 1° tile) · osm = raster base-map tiles · imagery = satellite/aerial tiles (ESRI World Imagery) — both rate-limited & capped, use your own tile server for large jobs · buildings = OSM footprints (extruded on the 3D globe) · clutter = ESA WorldCover 10 m land cover (≈130 MB / 3° tile). “whole planet” for terrain is clipped to SRTM land coverage. ⛉ verifies a pack's integrity & version.
+              <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                <li>Put the Ares laptop and the ATAK tablet on the <b>same</b> Wi-Fi or phone hotspot.</li>
+                <li>In the <b>Cursor-on-Target push</b> box above, paste <code>udp://239.2.3.1:6969</code> and click Apply.</li>
+                <li>On the tablet, open ATAK. No extra config — it already listens to the default SA multicast group.</li>
+                <li>In Ares, drop a LoB / run a DF fix / send GeoChat. The marker should appear in ATAK within ~1 s.</li>
+              </ol>
+              <div style={{ fontSize: 11, color: '#8b949e', marginTop: 6 }}>
+                ⚠ iPhone Personal Hotspot isolates clients — multicast may not pass. If you don't see markers, try a quick
+                ping from the tablet to the laptop's IP; if ping fails, use path B.
+              </div>
+            </div>
+
+            <div style={{ background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, padding: '8px 10px', marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#d29922', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+                B · AP isolation / multicast blocked · direct unicast
+              </div>
+              <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                <li>On the tablet, find its IP: <i>ATAK → Settings → About → IP address</i> (e.g. <code>172.20.10.3</code>).</li>
+                <li>In ATAK: <i>Settings → Network Preferences → Network Connections → Manage Inputs → Add</i>. Pick
+                    <b> UDP</b>, set port <code>4242</code>, save and enable it.</li>
+                <li>In the <b>Cursor-on-Target push</b> box above, replace the line with <code>udp://&lt;tablet-ip&gt;:4242</code>
+                    (e.g. <code>udp://172.20.10.3:4242</code>) and click Apply.</li>
+                <li>Run something in Ares; marker should hit ATAK within ~1 s.</li>
+              </ol>
+              <div style={{ fontSize: 11, color: '#8b949e', marginTop: 6 }}>
+                Note: hotspot IPs change when devices rejoin — you may need to update the target if you re-pair.
+              </div>
+            </div>
+
+            <div style={{ background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, padding: '8px 10px', marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#58a6ff', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+                C · You already run a TAK Server (production)
+              </div>
+              <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                <li>Decide which port: <code>tcp://&lt;taksrv&gt;:8087</code> (plain) or <code>tls://&lt;taksrv&gt;:8089</code> (mutual-TLS).</li>
+                <li>For TLS: set env vars before starting Ares — <code>ARES_COT_TLS_CA</code>, <code>ARES_COT_TLS_CERT</code>,
+                    <code>ARES_COT_TLS_KEY</code> (PEMs from your TAK Server CA / a client certificate enrolled with it).</li>
+                <li>Paste the URL in the box above and Apply.</li>
+                <li>Any ATAK / WinTAK already logged into that TAK Server receives Ares' CoT automatically — no per-device input.</li>
+              </ol>
+            </div>
+
+            <div style={{ background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, padding: '8px 10px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>
+                Coverage maps into ATAK (no plugin needed)
+              </div>
+              <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                <li>Run a coverage sim in the web UI.</li>
+                <li>Export it as KMZ (header → Export → KMZ, or the API call <code>POST /api/v1/atak/export/kmz</code>).</li>
+                <li>Sideload the <code>.kmz</code> onto the tablet (USB / Drive / etc.) and import in ATAK — it renders as a ground overlay.</li>
+              </ol>
+            </div>
+
+            <div style={{ color: '#6e7681', fontSize: 10, marginTop: 10 }}>
+              The full ATAK-CIV plugin (overlays, radial menu, Co-Opt, in-plugin DF) is tak.gov-SDK-blocked
+              — see <code>atak-plugin/README.md</code> for what's needed to build it. Until then, paths A/B/C
+              above deliver everything Ares produces straight into ATAK.
             </div>
           </div>
-          {/* jobs */}
-          {jobs.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              {jobs.slice(-4).map(j => (
-                <div key={j.job_id} style={{ fontSize: 11, color: j.status === 'error' ? '#ff7b72' : j.status === 'done' ? '#3fb950' : '#d29922', padding: '2px 0' }}>
-                  {j.job_id} · {j.layers?.join('+')} · {j.status}{typeof j.progress === 'number' && j.status === 'running' ? ` ${Math.round(j.progress * 100)}%` : ''} — {j.detail}
-                </div>
-              ))}
-            </div>
-          )}
         </Section>
 
         {/* Radio templates */}

@@ -1,6 +1,6 @@
 {
   "name": "ares-mobile",
-  "version": "1.0.0",
+  "version": "5.2.0-alpha",
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "start": "expo start",

@@ -187,6 +187,12 @@ export default function App() {
   const [manetResult, setManetResult] = useState(null)
   const [manetAddingNode, setManetAddingNode] = useState(false)
 
+  // Last-clicked map feature (kind + id/index), used by the Delete key and the trash-can header
+  // button to remove the specific feature the user is interacting with. Covers the primary TX,
+  // the receiver, every extra TX, multipoint TXs, MANET nodes, and P2P route waypoints. Set by
+  // MapView's marker click handlers; cleared on removal or on map background click.
+  const [mapSel, setMapSel] = useState(null)   // null | { kind, id? }
+
   // ── Best server TX sites ──────────────────────────────────────────────────
   const [bestServerSites, setBestServerSites] = useState([])
   const [bestServerResult, setBestServerResult] = useState(null)
@@ -371,11 +377,13 @@ export default function App() {
   // ── Draw complete callback (from MapView) ─────────────────────────────────
   const handleDrawComplete = useCallback((type, data) => {
     if (type === 'bounds' && awaitingPackBboxRef.current) {
-      // a box drawn to pick the area for an offline-pack download (ATAK/Server panel)
+      // a box drawn to pick the area for an offline-pack download (Layer Manager →
+      // RegionDownloadPanel). `awaitingPackBboxRef.current` is the panel id that asked
+      // for the bbox; we re-open it once the rectangle is in.
       awaitingPackBboxRef.current = false
       setPackBboxFromMap([data.west, data.south, data.east, data.north])
       setDrawMode(null)
-      setAtakPanelOpen(true)
+      setLayersOpen(true)
       toast.info(`Region selected: ${data.west.toFixed(3)},${data.south.toFixed(3)} → ${data.east.toFixed(3)},${data.north.toFixed(3)}`)
       return
     }
@@ -529,12 +537,33 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo])
 
-  // Delete / Backspace removes the last-clicked map feature (imported layer or drawn feature).
+  // Delete / Backspace removes the last-clicked map feature. Priority is the map-feature selection
+  // (primary TX / RX / extra TX / multipoint TX / MANET node / P2P route waypoint), falling back
+  // to the useUserLayers selection (imported KML/GeoJSON layers and drawn features).
+  const removeSelectedMapFeature = useCallback(() => {
+    if (!mapSel) return null
+    switch (mapSel.kind) {
+      case 'primary_tx': setTxActive(false); setMapSel(null); return 'Primary TX'
+      case 'rx':         setRxPoint(null); setMapSel(null); return 'Receiver'
+      case 'extra_tx':   setExtraTxList(prev => prev.filter(e => e.id !== mapSel.id)); setMapSel(null); return 'Extra TX'
+      case 'multipoint_tx':
+        setMultipointTxs(prev => prev.filter((_, i) => i !== mapSel.id)); setMapSel(null); return 'Multipoint TX'
+      case 'manet_node': setManetNodes(prev => prev.filter(n => n.id !== mapSel.id)); setMapSel(null); return 'MANET node'
+      case 'route_waypoint':
+        setRouteWaypoints(prev => prev.filter((_, i) => i !== mapSel.id)); setMapSel(null); return 'Route waypoint'
+      default: return null
+    }
+  }, [mapSel])
+
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
       const tag = (e.target?.tagName || '').toLowerCase()
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return
+      // 1) try the map-feature selection (TX / RX / multipoint / MANET / waypoint)
+      const removed = removeSelectedMapFeature()
+      if (removed) { e.preventDefault(); toast.info(`Removed ${removed}`); return }
+      // 2) fall back to useUserLayers (imported KML/GeoJSON layers + drawn features)
       const sel = ul.getSelectedFeature?.()
       if (!sel) return
       e.preventDefault()
@@ -543,18 +572,41 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [ul.getSelectedFeature, ul.removeSelected])
+  }, [ul.getSelectedFeature, ul.removeSelected, removeSelectedMapFeature])
+
+  // Drop a stale mapSel when its target no longer exists (sidebar Remove, draw re-run, etc.).
+  useEffect(() => {
+    if (!mapSel) return
+    const exists = (() => {
+      switch (mapSel.kind) {
+        case 'primary_tx':     return txActive
+        case 'rx':             return !!rxPoint
+        case 'extra_tx':       return extraTxList.some(e => e.id === mapSel.id)
+        case 'multipoint_tx':  return mapSel.id < multipointTxs.length
+        case 'manet_node':     return manetNodes.some(n => n.id === mapSel.id)
+        case 'route_waypoint': return mapSel.id < routeWaypoints.length
+        default: return false
+      }
+    })()
+    if (!exists) setMapSel(null)
+  }, [mapSel, txActive, rxPoint, extraTxList, multipointTxs, manetNodes, routeWaypoints])
 
   // ── Save / Load state ─────────────────────────────────────────────────────
-  // The downloaded .json now carries the *whole* scene: emitters/receiver/propagation,
-  // saved locations, LoBs/DF, the imported KMZ/KML/GeoJSON/imagery/tiles/terrain-grid layers
-  // + drawings (via ul.exportSession), the propagation coverage + building footprints, and the
-  // analysis inputs/results (best-site, route, multipoint, MANET, best-server, BSA, P2P).
+  // The downloaded .json carries the *whole* scene — literally everything on the map. Beyond
+  // emitters/receiver/propagation/atmosphere, this covers: imported KMZ/KML/GeoJSON/imagery/
+  // tile-source/terrain-grid layers + drawings (via ul.exportSession), the propagation coverage
+  // + building footprints, every analysis input/result (best-site, route, multipoint, MANET,
+  // best-server, BSA polygon, P2P, radar, terrain profile, standalone terrain profile), the SDR
+  // live overlay (features + auto-coverage), LoBs/DF, saved locations, the map view (centre +
+  // zoom), and the UI prefs that affect what's visible (brightness, compass, units, coord
+  // system, sidebar/bottom-panel collapse).
   const handleSaveState = useCallback(() => {
     let userLayers = null
     try { userLayers = ul.exportSession() } catch { userLayers = null }
+    let mapView = null
+    try { mapView = mapImportApiRef.current?.getView?.() ?? null } catch { mapView = null }
     const state = {
-      version: '2.1', savedAt: new Date().toISOString(),
+      version: '2.2', savedAt: new Date().toISOString(),
       primaryTransmitter: tx, extraTransmitters: extraTxList,
       receiver: rx, propagation, atmosphere,
       savedLocations,
@@ -570,8 +622,13 @@ export default function App() {
         bestServerSites, bestServerQuery, bestServerResult,
         polygonCoords, polygonBsaCoveragePct, polygonBsaResult,
         drawBounds,
+        standaloneProfile,
       },
-      ui: { txLabel, activeTab, mainMode, bottomTab, coverageRaster },
+      sdr: { features: sdrFeatures, coverage: sdrCoverage },
+      mapView,
+      ui: { txLabel, activeTab, mainMode, bottomTab, coverageRaster,
+            mapBrightness, showCompassRose, distUnit, coordSystem,
+            sidebarOpen, bottomOpen },
     }
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -580,13 +637,15 @@ export default function App() {
     a.download = `ares-state-${new Date().toISOString().slice(0, 10)}.json`
     a.click()
     URL.revokeObjectURL(url)
-    toast.success('State saved (emitters · layers/KMZ · drawings · propagation · LoBs · analyses)')
+    toast.success('State saved (everything on the map + propagation/geolocation analyses)')
   }, [tx, extraTxList, rx, propagation, atmosphere, savedLocations, lobs, capGroups, lobAlgorithm,
       ul, coverageGeoJSON, metadata, buildingGeoJSON, warnings, p2pResult, terrainProfile, radarResult,
       bestSiteCandidates, bestSiteResult, routeWaypoints, routeReceiverPoint, routeResult,
       multipointTxs, multipointResult, manetNodes, manetResult, bestServerSites, bestServerQuery,
       bestServerResult, polygonCoords, polygonBsaCoveragePct, polygonBsaResult, drawBounds,
-      txLabel, activeTab, mainMode, bottomTab, coverageRaster])
+      standaloneProfile, sdrFeatures, sdrCoverage,
+      txLabel, activeTab, mainMode, bottomTab, coverageRaster,
+      mapBrightness, showCompassRose, distUnit, coordSystem, sidebarOpen, bottomOpen])
 
   const handleLoadState = useCallback(() => {
     const input = document.createElement('input')
@@ -646,12 +705,30 @@ export default function App() {
           if (a.polygonBsaCoveragePct != null) setPolygonBsaCoveragePct(a.polygonBsaCoveragePct)
           if ('polygonBsaResult' in a) setPolygonBsaResult(a.polygonBsaResult ?? null)
           if ('drawBounds' in a) setDrawBounds(a.drawBounds ?? null)
+          if ('standaloneProfile' in a) setStandaloneProfile(a.standaloneProfile ?? null)
+          // SDR live overlay (features + auto-coverage) — v2.2+
+          if (state.sdr) {
+            if (Array.isArray(state.sdr.features)) setSdrFeatures(state.sdr.features)
+            if ('coverage' in state.sdr) setSdrCoverage(state.sdr.coverage ?? null)
+          }
+          // Map view (centre + zoom) — v2.2+. Defer one tick so the leaflet instance exists.
+          if (state.mapView) {
+            const v = state.mapView
+            setTimeout(() => { try { mapImportApiRef.current?.setView?.(v) } catch { /* noop */ } }, 0)
+          }
           if (state.ui) {
             if (state.ui.txLabel) setTxLabel(state.ui.txLabel)
             if (state.ui.activeTab) setActiveTab(state.ui.activeTab)
             if (state.ui.mainMode) setMainMode(state.ui.mainMode)
             if (state.ui.bottomTab) setBottomTab(state.ui.bottomTab)
             if (typeof state.ui.coverageRaster === 'boolean') setCoverageRaster(state.ui.coverageRaster)
+            // v2.2+: visible-on-map prefs
+            if (typeof state.ui.mapBrightness === 'number') setMapBrightness(state.ui.mapBrightness)
+            if (typeof state.ui.showCompassRose === 'boolean') setShowCompassRose(state.ui.showCompassRose)
+            if (typeof state.ui.distUnit === 'string') setDistUnit(state.ui.distUnit)
+            if (typeof state.ui.coordSystem === 'string') setCoordSystem(state.ui.coordSystem)
+            if (typeof state.ui.sidebarOpen === 'boolean') setSidebarOpen(state.ui.sidebarOpen)
+            if (typeof state.ui.bottomOpen === 'boolean') setBottomOpen(state.ui.bottomOpen)
           }
           toast.success('State loaded')
         } catch (err) {
@@ -705,10 +782,11 @@ export default function App() {
   }, [])
 
   // ── Clear all layers ──────────────────────────────────────────────────────
-  // Wipes everything overlaid on the map: imported KMZ/KML/GeoJSON/imagery/tiles/imported
-  // terrain grids, drawings, propagation coverage + every analysis result/input layer, the
-  // SDR live overlay, buildings, and the LoBs / DF. (Emitters/receiver and the persistent
-  // offline data-pack library are left alone.)
+  // Trash-can in the header — wipes everything visible on the map: imported KMZ/KML/GeoJSON/
+  // imagery/tile overlays, drawings, propagation coverage + every analysis result/input array,
+  // the SDR live overlay, buildings, LoBs / DF, AND the primary TX / receiver / extra TXs.
+  // The persistent offline data-pack library is left alone (it survives sessions on disk).
+  // For surgical single-feature removal, click the feature on the map and press Delete.
   const handleClearAll = useCallback(() => {
     try { ul.clearAll(); ul.clearDrawn() } catch { /* noop */ }
     setCoverageGeoJSON(null); setMetadata(null); setP2pResult(null)
@@ -717,13 +795,14 @@ export default function App() {
     setPolygonBsaResult(null); setBestServerResult(null); setRouteResult(null); setMultipointResult(null)
     setBuildingGeoJSON(null)
     setExtraGeojsonLayers([])
-    setExtraTxList(prev => prev.map(e => ({ ...e, geojson: null })))
+    setExtraTxList([])
+    setTxActive(false); setRxPoint(null)
     setSdrFeatures([]); setSdrCoverage(null)
     setLobs([]); setCapGroups({})
     setBestSiteCandidates([]); setRouteWaypoints([]); setMultipointTxs([]); setManetNodes([]); setBestServerSites([]); setPolygonCoords([]); setDrawBounds(null)
-    setDrawMode(null)
+    setDrawMode(null); setMapSel(null)
     if (ul.getSelectedFeature?.()) ul.selectFeature?.(null)
-    toast.info('Cleared all layers, drawings, results & LoBs')
+    toast.info('Cleared all layers, drawings, results, emitters & LoBs')
   }, [ul])
 
   // ── Coverage simulation ───────────────────────────────────────────────────
@@ -1308,7 +1387,6 @@ export default function App() {
         helpOpen={helpOpen} onCloseHelp={() => setHelpOpen(false)}
         atakPanelOpen={atakPanelOpen} onCloseAtak={() => setAtakPanelOpen(false)}
         mapCenter={{ lat: tx.lat, lon: tx.lon }}
-        packBboxFromMap={packBboxFromMap} awaitingPackBboxRef={awaitingPackBboxRef} setDrawMode={setDrawMode}
         sdrPanelOpen={sdrPanelOpen} onCloseSdr={() => setSdrPanelOpen(false)}
         onSdrFeatures={setSdrFeatures} onSdrCoverage={setSdrCoverage}
         archiveOpen={archiveOpen} onCloseArchive={() => setArchiveOpen(false)}
@@ -1329,7 +1407,14 @@ export default function App() {
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               <LayerManagerPanel ul={ul} openFileDialog={() => mapImportApiRef.current?.openFileDialog?.()}
-                regionPreselect={layersRegionPreselect} onConsumeRegionPreselect={() => setLayersRegionPreselect(null)} />
+                regionPreselect={layersRegionPreselect} onConsumeRegionPreselect={() => setLayersRegionPreselect(null)}
+                incomingBbox={packBboxFromMap} onConsumeBbox={() => setPackBboxFromMap(null)}
+                onRequestDrawBbox={() => {
+                  setLayersOpen(false)
+                  awaitingPackBboxRef.current = true
+                  setDrawMode('bounds')
+                  toast.info('Draw a rectangle on the map to pick the download area')
+                }} />
             </div>
           </div>
         </div>
@@ -1646,6 +1731,11 @@ export default function App() {
           ul={ul}
           terrainLineMode={terrainLineMode}
           onTerrainLineComplete={handleTerrainLineComplete}
+          multipointTxs={multipointTxs}
+          manetNodes={manetNodes}
+          routeWaypoints={routeWaypoints}
+          mapSel={mapSel}
+          onSelectFeature={setMapSel}
         />
         )}
       </div>

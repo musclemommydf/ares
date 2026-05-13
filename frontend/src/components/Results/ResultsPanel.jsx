@@ -77,32 +77,31 @@ function LinkBudgetTable({ budget }) {
   )
 }
 
-export default function ResultsPanel({
-  metadata, p2pResult, warnings, spaceWeather, activeTab, showBudget
-}) {
-  if (showBudget) {
-    const budget = p2pResult?.link_budget || metadata?.link_budget
-    if (!budget) return (
-      <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 12 }}>
-        Run a point-to-point simulation to see the link budget.
+function LinkBudgetSection({ budget, isViable }) {
+  if (!budget) return null
+  return (
+    <div style={{ borderTop: '1px solid var(--border-muted)', marginTop: 8, paddingTop: 8 }}>
+      <div style={{ padding: '0 14px 6px', fontSize: 11, fontWeight: 600, letterSpacing: 0.4,
+                    textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+        Link Budget
       </div>
-    )
-    return (
-      <div style={{ padding: '8px 0' }}>
-        <LinkBudgetTable budget={budget} />
-        {p2pResult?.is_viable !== undefined && (
-          <div style={{ padding: '8px 12px' }}>
-            <div className={`alert ${p2pResult.link_budget?.is_viable ? 'alert-success' : 'alert-warning'}`}>
-              {p2pResult.link_budget?.is_viable
-                ? '✓ Link is viable'
-                : '✗ Link margin insufficient — consider increasing power, gain, or reducing distance'}
-            </div>
+      <LinkBudgetTable budget={budget} />
+      {isViable !== undefined && (
+        <div style={{ padding: '8px 12px' }}>
+          <div className={`alert ${budget.is_viable ? 'alert-success' : 'alert-warning'}`}>
+            {budget.is_viable
+              ? '✓ Link is viable'
+              : '✗ Link margin insufficient — consider increasing power, gain, or reducing distance'}
           </div>
-        )}
-      </div>
-    )
-  }
+        </div>
+      )}
+    </div>
+  )
+}
 
+export default function ResultsPanel({
+  metadata, p2pResult, warnings, spaceWeather, activeTab
+}) {
   // Coverage results (also covers the radar tab — it shares the coverage path)
   if ((activeTab === 'coverage' || activeTab === 'radar') && metadata) {
     return (
@@ -150,6 +149,8 @@ export default function ResultsPanel({
           {metadata.gpu_used && <span style={{ color: 'var(--accent-purple)', marginLeft: 6 }}>GPU</span>}
           {' · '}{(metadata.num_points || 0).toLocaleString()} points
         </div>
+
+        <LinkBudgetSection budget={metadata.link_budget} isViable={metadata.link_budget?.is_viable} />
       </div>
     )
   }
@@ -188,6 +189,8 @@ export default function ResultsPanel({
             ))}
           </div>
         )}
+
+        <LinkBudgetSection budget={p2pResult.link_budget} isViable={p2pResult.link_budget?.is_viable} />
       </div>
     )
   }

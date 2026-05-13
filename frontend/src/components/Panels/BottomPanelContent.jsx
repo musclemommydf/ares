@@ -40,7 +40,6 @@ export default function BottomPanelContent({
           ? <div style={SCROLL}><ResultsPanel metadata={metadata} p2pResult={p2pResult} warnings={warnings} spaceWeather={spaceWeather} activeTab={activeTab} /></div>
           : <div style={SCROLL}><AnalysisResults activeTab={activeTab} {...(analysisResults || {})} /></div>
       )}
-      {active === 'budget' && <div style={SCROLL}><ResultsPanel metadata={metadata} p2pResult={p2pResult} warnings={warnings} spaceWeather={spaceWeather} activeTab={activeTab} showBudget /></div>}
       {active === '3d' && (
         <div style={COL}>
           <ThreeDView terrainGrid={terrainGrid} loading={terrainGridLoading} coverageGeoJSON={coverageGeoJSON} buildingGeoJSON={buildingGeoJSON} tx={tx} minSignalDbm={propagation.min_signal_dbm} />

@@ -231,6 +231,17 @@ async def region_at(lat: float = Query(..., ge=-90, le=90), lon: float = Query(.
     return r
 
 
+@router.get("/regions/{code}/cells")
+async def list_region_cells(code: str):
+    """The 0.5° sub-cells covering a parent region's bbox. Each cell is a z17-friendly download
+    unit (~150–800 MB at z17); the parent itself stays selectable for "do a larger area at once"."""
+    from app.core import regions
+    parent = regions.get_region(code)
+    if parent is None or parent.get("cell"):
+        raise HTTPException(404, f"no such parent region {code!r}")
+    return {"parent": parent, "cells": regions.cells_for(code), "cell_deg": regions.CELL_DEG}
+
+
 class RegionDownloadRequest(BaseModel):
     layers: list[str] = ["terrain", "imagery", "buildings", "osm", "clutter"]   # imagery + DTED + clutter, by default
     max_zoom: Optional[int] = None                                              # imagery/osm street zoom (default 15 imagery / 12 osm)
@@ -248,6 +259,51 @@ async def estimate_region(code: str, req: RegionDownloadRequest, principal: dict
         raise HTTPException(404, f"no such region {code!r}")
     est = pack_builder.estimate_bytes(req.layers, region["bbox"], req.max_zoom)
     return {"region": region, **est, "layers": req.layers, "max_zoom": req.max_zoom}
+
+
+class BboxDownloadRequest(BaseModel):
+    bbox: list[float]                                                            # [w, s, e, n]
+    layers: list[str] = ["terrain", "imagery", "buildings", "osm", "clutter"]
+    max_zoom: Optional[int] = None
+    source: Optional[str] = None
+    name: Optional[str] = None                                                   # optional human label
+
+
+@router.post("/regions/by-bbox/estimate")
+async def estimate_bbox(req: BboxDownloadRequest, principal: dict = Depends(require_auth)):
+    """Like ``/regions/{code}/estimate`` but takes a freeform bbox. Drives the "Draw on map"
+    download flow in the Layer Manager — the rectangle a user drew there isn't in the region
+    catalogue, so it bypasses ``get_region`` and goes straight to the pack-size estimator."""
+    if len(req.bbox) != 4:
+        raise HTTPException(400, "bbox must be [w, s, e, n]")
+    from app.core import pack_builder
+    est = pack_builder.estimate_bytes(req.layers, req.bbox, req.max_zoom)
+    region = {"code": "(custom-bbox)", "name": req.name or "Drawn area",
+              "country": "(custom)", "bbox": list(req.bbox)}
+    return {"region": region, **est, "layers": req.layers, "max_zoom": req.max_zoom}
+
+
+@router.post("/regions/by-bbox/download")
+async def download_bbox(req: BboxDownloadRequest, principal: dict = Depends(require_auth)):
+    """Like ``/regions/{code}/download`` but takes a freeform bbox — one pack job per layer."""
+    if len(req.bbox) != 4:
+        raise HTTPException(400, "bbox must be [w, s, e, n]")
+    bbox = list(req.bbox)
+    jobs = []
+    for layer in req.layers:
+        try:
+            job = packs_mod.start_download(layers=[layer], bbox=bbox, fidelity="best",
+                                           max_zoom=req.max_zoom, source=req.source)
+            job["region"] = {"code": "(custom-bbox)", "name": req.name or "Drawn area"}
+            jobs.append(job)
+        except ValueError as e:
+            jobs.append({"layer": layer, "status": "error", "detail": str(e)})
+    _kick_pack_jobs(jobs)
+    audit("packs.bbox_download", bbox=bbox, layers=req.layers)
+    region = {"code": "(custom-bbox)", "name": req.name or "Drawn area",
+              "country": "(custom)", "bbox": bbox}
+    return {"region": region, "jobs": jobs,
+            "note": "drawn-bbox pack — same persistent library as named-region downloads"}
 
 
 @router.post("/regions/{code}/download")

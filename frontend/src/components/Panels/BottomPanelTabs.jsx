@@ -1,16 +1,18 @@
 import { ChevronDown } from 'lucide-react'
 
 const SIMPLE_TABS = [
-  ['results', 'Results'], ['budget', 'Link Budget'], ['3d', '3D View'],
+  ['results', 'Results'], ['3d', '3D View'],
   ['terrain', 'Terrain Profile'], ['df', 'DF'], ['emitters', 'Emitter Summary'],
   ['video', 'Video'], ['chat', 'Chat'],
 ]
 
 /**
- * The bottom-panel tab bar: Results / Link Budget / 3D View / Terrain Profile / DF /
+ * The bottom-panel tab bar: Results / 3D View / Terrain Profile / DF /
  * Emitter Summary / Video / Chat / Saved Locations / (Space Wx, when space weather is
  * available), plus the hide button. App owns the active tab, the counts, the spaceWeather
  * gate and the close action. (dB Calc and Layers live in the header now.)
+ *
+ * Link Budget is rendered inline within the Results tab (P2P sim) — no separate tab.
  */
 export default function BottomPanelTabs({ active, onSelect, savedCount, spaceWeather, onClose }) {
   return (

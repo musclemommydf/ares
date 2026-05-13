@@ -256,6 +256,9 @@ async function createWindow() {
   const distDir = path.join(__dirname, '..', 'frontend', 'dist')
 
   mainWindow = new BrowserWindow({
+    // Initial size is only used until the first call to maximize() below; we still set a sane
+    // pre-maximize size so the "restore" button on the title bar gives a usable window rather
+    // than something tiny.
     width: 1440,
     height: 900,
     minWidth: 900,
@@ -271,6 +274,9 @@ async function createWindow() {
       webSecurity: true,
     },
   })
+  // Always open maximized — Ares is information-dense, the map + sidebars + bottom panel only
+  // fit comfortably above ~1600 px wide. (Restore is still one click on the title bar.)
+  mainWindow.maximize()
   // Hide the native OS menu bar — all actions are in the in-app hamburger menu.
   mainWindow.setMenuBarVisibility(false)
   mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -363,7 +369,7 @@ function buildMenu() {
         { label: 'About', click: () => dialog.showMessageBox(mainWindow, {
             type: 'info',
             title: 'Ares',
-            message: 'Ares v2.3.0',
+            message: 'Ares v5.2.0 — alpha',
             detail:
               'Terrain-based RF propagation & geolocation platform.\n\n' +
               'Models: ITM/Longley-Rice, Hata, COST-231, Two-Ray,\n' +

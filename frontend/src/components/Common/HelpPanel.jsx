@@ -461,7 +461,7 @@ TERRAIN PROFILE
     • Orange/red Fresnel zone envelope
     • Line-of-sight line
 
-LINK BUDGET TAB
+LINK BUDGET (shown inline in the Results tab after a P2P run)
   Detailed breakdown of signal budget:
     TX power → cable loss → antenna gain → path loss → atmospheric loss →
     RX antenna gain → received power → receiver sensitivity → link margin

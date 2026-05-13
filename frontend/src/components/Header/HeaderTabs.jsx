@@ -22,7 +22,15 @@ const TOOL_TABS = [
 export default function HeaderTabs({ mainMode, activeTab, lobCount, lobGroupCount, onSelectMode, onSelectTab }) {
   return (
     <>
-      <div className="app-logo" style={{ flexShrink: 0 }}><AppIcon size={24} /> Ares</div>
+      <div className="app-logo" style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <AppIcon size={24} /> Ares
+        <span title="Alpha — APIs and UX may change between releases"
+              style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase',
+                       padding: '1px 5px', borderRadius: 3, color: '#f0883e',
+                       background: 'rgba(240,136,62,0.12)', border: '1px solid rgba(240,136,62,0.45)' }}>
+          alpha v5.2
+        </span>
+      </div>
       <div style={DIV} />
 
       {/* Mode tabs */}

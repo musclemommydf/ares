@@ -213,6 +213,16 @@ export default function MapView({
   // Optional: line-draw mode for standalone terrain profile
   terrainLineMode = false,
   onTerrainLineComplete,    // (path: [[lat, lon], ...]) => void
+  // Persistent state-driven feature arrays (rendered as clickable markers so Delete-key /
+  // trash-can can target them). MANET nodes carry stable ids; multipoint TXs / route waypoints
+  // use their array index as the id so removal still works without renumbering hassle.
+  multipointTxs = [],
+  manetNodes = [],
+  routeWaypoints = [],
+  // Map-feature selection — set by marker click handlers, consumed by the Delete key in App.jsx.
+  // mapSel: null | { kind: 'primary_tx'|'rx'|'extra_tx'|'multipoint_tx'|'manet_node'|'route_waypoint', id? }
+  mapSel = null,
+  onSelectFeature,            // (sel) => void
 }) {
   const viewMode = useViewMode((s) => s.mode)
   const setViewMode = useViewMode((s) => s.setMode)
@@ -223,6 +233,10 @@ export default function MapView({
   const gpsMarkerRef = useRef(null)
   const coverageLayerRef = useRef(null)
   const extraTxMarkersRef = useRef({})   // id → L.Marker
+  const multipointMarkersRef = useRef([]) // L.CircleMarker[], parallel to multipointTxs
+  const manetMarkersRef = useRef({})      // id → L.Marker (driven by state, separate from result-geojson copy)
+  const routeMarkersRef = useRef([])      // L.CircleMarker[], parallel to routeWaypoints
+  const selectFeatureRef = useRef(onSelectFeature)
   const extraLayersRef = useRef({})      // id → L.GeoJSON layer
   const p2pLineRef = useRef(null)
   const buildingLayerRef = useRef(null)
@@ -285,6 +299,7 @@ export default function MapView({
   useEffect(() => { activeTabRef.current = activeTab }, [activeTab])
   useEffect(() => { drawModeRef.current = drawMode }, [drawMode])
   useEffect(() => { onMapClickRef.current = onMapClick }, [onMapClick])
+  useEffect(() => { selectFeatureRef.current = onSelectFeature }, [onSelectFeature])
   useEffect(() => { mapColorsRef.current = mapColors }, [mapColors])
   useEffect(() => { lobPickingModeRef.current = lobPickingMode }, [lobPickingMode])
   useEffect(() => { onAddLoBObserverRef.current = onAddLoBObserver }, [onAddLoBObserver])
@@ -436,6 +451,10 @@ export default function MapView({
       // Always dismiss context menu and panels on any click
       setCtxMenu(null)
       setCenterOnOpen(false)
+      // Background-map click clears any previously-selected map feature so a stray Delete keypress
+      // doesn't surprise-remove a TX/MANET-node/waypoint the user no longer thought was selected.
+      // (Leaflet marker clicks don't propagate to the map, so this only fires on empty space.)
+      if (!drawModeRef.current && !terrainLineModeRef.current) selectFeatureRef.current?.(null)
 
       // If a drawing tool is active, let the draw controller own the click
       if (drawCtrlRef.current?.getActiveTool()) return
@@ -909,12 +928,24 @@ export default function MapView({
     }
   }, [handleImportFiles])
 
-  // Expose import handler so the parent (App.jsx hamburger menu) can trigger it
+  // Expose import handler (and the map view getter/setter, for save/load) so the
+  // parent (App.jsx) can trigger them.
   useEffect(() => {
     if (typeof onImportApi === 'function') {
       onImportApi({
         openFileDialog: () => fileInputRef.current?.click(),
         importFiles: handleImportFiles,
+        getView: () => {
+          const m = leafletRef.current
+          if (!m) return null
+          const c = m.getCenter()
+          return { lat: c.lat, lon: c.lng, zoom: m.getZoom() }
+        },
+        setView: (v) => {
+          const m = leafletRef.current
+          if (!m || !v || typeof v.lat !== 'number' || typeof v.lon !== 'number') return
+          m.setView([v.lat, v.lon], typeof v.zoom === 'number' ? v.zoom : m.getZoom())
+        },
       })
     }
   }, [handleImportFiles])
@@ -1035,7 +1066,7 @@ export default function MapView({
     } else {
       txMarkerRef.current = L.marker([tx.lat, tx.lon], {
         icon: txIcon, draggable: true,
-        title: `${txLabel} — Primary (drag to move)`,
+        title: `${txLabel} — Primary (drag to move · click to select, Delete to remove)`,
         zIndexOffset: 1000,
       }).addTo(map)
 
@@ -1043,6 +1074,7 @@ export default function MapView({
         const { lat, lng } = e.target.getLatLng()
         onTxDrag?.(lat, lng)
       })
+      txMarkerRef.current.on('click', () => selectFeatureRef.current?.({ kind: 'primary_tx' }))
 
       txMarkerRef.current.bindPopup(() =>
         `<div style="font-size:12px;min-width:140px">
@@ -1090,13 +1122,14 @@ export default function MapView({
       rxMarkerRef.current.setLatLng([rxPoint.lat, rxPoint.lon])
     } else {
       rxMarkerRef.current = L.marker([rxPoint.lat, rxPoint.lon], {
-        icon: rxIcon, draggable: true, title: 'Receiver', zIndexOffset: 900,
+        icon: rxIcon, draggable: true, title: 'Receiver (click to select, Delete to remove)', zIndexOffset: 900,
       }).addTo(map)
 
       rxMarkerRef.current.on('dragend', (e) => {
         const { lat, lng } = e.target.getLatLng()
         onRxDrag?.(lat, lng)
       })
+      rxMarkerRef.current.on('click', () => selectFeatureRef.current?.({ kind: 'rx' }))
       attachRulerClick(rxMarkerRef.current)
       if (rulerModeRef.current) rxMarkerRef.current.dragging?.disable()
     }
@@ -1226,13 +1259,14 @@ export default function MapView({
           iconSize: [24, 24], iconAnchor: [12, 12],
         })
         const marker = L.marker([etx.lat, etx.lon], {
-          icon, draggable: true, title: `${label} (drag to move)`, zIndexOffset: 990,
+          icon, draggable: true, title: `${label} (drag to move · click to select, Delete to remove)`, zIndexOffset: 990,
         }).addTo(map)
 
         marker.on('dragend', (e) => {
           const { lat, lng } = e.target.getLatLng()
           onExtraTxDrag?.(entry.id, lat, lng)
         })
+        marker.on('click', () => selectFeatureRef.current?.({ kind: 'extra_tx', id: entry.id }))
 
         marker.bindPopup(`<div style="font-size:12px;min-width:140px">
           <strong style="color:${color}">${label}</strong><br>
@@ -1271,6 +1305,85 @@ export default function MapView({
       }
     })
   }, [extraTxList])
+
+  // ── Persistent input markers for multipoint TXs / MANET nodes / route waypoints ───
+  // These arrays are placed via draw modes (multipoint / manet / route) and the temporary
+  // draw.markers are cleaned up on draw-finish — so without this effect, you couldn't see or
+  // interact with the inputs between drawing and running the analysis. Each marker is wired
+  // to onSelectFeature so the Delete key (and the trash-can fallback) can remove it.
+
+  // Multipoint TXs — small amber dots, indexed by array position.
+  useEffect(() => {
+    const map = leafletRef.current
+    if (!map) return
+    multipointMarkersRef.current.forEach(m => m.remove())
+    multipointMarkersRef.current = multipointTxs.map((p, i) => {
+      const m = L.circleMarker([p.lat, p.lon], {
+        radius: 6, fillColor: '#f59e0b', fillOpacity: 0.95, color: '#fff', weight: 2,
+        interactive: true,
+      }).addTo(map)
+      m.bindTooltip(`Multipoint TX #${i + 1} — click to select, Delete to remove`,
+                    { direction: 'top', offset: [0, -6] })
+      m.on('click', () => selectFeatureRef.current?.({ kind: 'multipoint_tx', id: i }))
+      return m
+    })
+    return () => {
+      multipointMarkersRef.current.forEach(m => m.remove())
+      multipointMarkersRef.current = []
+    }
+  }, [multipointTxs])
+
+  // MANET nodes — teal dots with the node's label initial; keyed by stable id.
+  useEffect(() => {
+    const map = leafletRef.current
+    if (!map) return
+    const seen = new Set()
+    manetNodes.forEach(n => {
+      const id = String(n.id)
+      seen.add(id)
+      if (manetMarkersRef.current[id]) {
+        manetMarkersRef.current[id].setLatLng([n.lat, n.lon])
+      } else {
+        const initial = (n.label || '?').slice(0, 1)
+        const icon = L.divIcon({
+          className: '',
+          html: `<div style="width:18px;height:18px;border-radius:50%;background:#06d6a0;border:2px solid #fff;
+                  box-shadow:0 1px 4px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;
+                  font-size:9px;font-weight:700;color:#000;">${initial}</div>`,
+          iconSize: [18, 18], iconAnchor: [9, 9],
+        })
+        const m = L.marker([n.lat, n.lon], {
+          icon, title: `${n.label} — click to select, Delete to remove`, zIndexOffset: 980,
+        }).addTo(map)
+        m.on('click', () => selectFeatureRef.current?.({ kind: 'manet_node', id: n.id }))
+        manetMarkersRef.current[id] = m
+      }
+    })
+    Object.keys(manetMarkersRef.current).forEach(id => {
+      if (!seen.has(id)) { manetMarkersRef.current[id].remove(); delete manetMarkersRef.current[id] }
+    })
+  }, [manetNodes])
+
+  // Route waypoints — small blue dots along the P2P route, indexed by array position.
+  useEffect(() => {
+    const map = leafletRef.current
+    if (!map) return
+    routeMarkersRef.current.forEach(m => m.remove())
+    routeMarkersRef.current = routeWaypoints.map((p, i) => {
+      const m = L.circleMarker([p.lat, p.lon], {
+        radius: 5, fillColor: '#00b4d8', fillOpacity: 0.95, color: '#fff', weight: 2,
+        interactive: true,
+      }).addTo(map)
+      m.bindTooltip(`Waypoint ${i + 1} — click to select, Delete to remove`,
+                    { direction: 'top', offset: [0, -6] })
+      m.on('click', () => selectFeatureRef.current?.({ kind: 'route_waypoint', id: i }))
+      return m
+    })
+    return () => {
+      routeMarkersRef.current.forEach(m => m.remove())
+      routeMarkersRef.current = []
+    }
+  }, [routeWaypoints])
 
   // ── Extra GeoJSON layers (MANET, route, satellite, ray trace, etc.) ───────
   useEffect(() => {

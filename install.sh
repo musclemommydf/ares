@@ -89,7 +89,7 @@ done
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║               Ares  Installer v5.1               ║${NC}"
+echo -e "${BOLD}║         Ares  Installer  v5.2 (alpha)            ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 

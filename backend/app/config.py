@@ -55,7 +55,7 @@ def _resolve_auth_enabled() -> bool:
 
 class Settings(BaseSettings):
     app_name: str = "Ares"
-    app_version: str = "2.0.0"
+    app_version: str = "5.2.0-alpha"
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))

@@ -37,7 +37,8 @@ function fmtMeters(m) {
   return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(0)} m`
 }
 
-export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, regionPreselect, onConsumeRegionPreselect }) {
+export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, regionPreselect, onConsumeRegionPreselect,
+                                            incomingBbox, onConsumeBbox, onRequestDrawBbox }) {
   const [kindFilter, setKindFilter] = useState(new Set(ALL_KINDS))
   const [tileFormOpen, setTileFormOpen] = useState(false)
   const [tileForm, setTileForm] = useState({
@@ -153,7 +154,9 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
       </div>
 
       {/* Download offline mapping data for a state / country / region → the persistent pack library */}
-      <RegionDownloadPanel preselect={regionPreselect} onConsumePreselect={onConsumeRegionPreselect} />
+      <RegionDownloadPanel preselect={regionPreselect} onConsumePreselect={onConsumeRegionPreselect}
+                            incomingBbox={incomingBbox} onConsumeBbox={onConsumeBbox}
+                            onRequestDrawBbox={onRequestDrawBbox} />
 
       {/* Tile source form */}
       {tileFormOpen && (

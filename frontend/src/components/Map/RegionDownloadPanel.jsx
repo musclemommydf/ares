@@ -6,7 +6,9 @@
  * "Update" button is the *only* way to re-fetch a fresher version — there is no auto/background refresh.
  */
 import { useEffect, useRef, useState } from 'react'
-import { searchRegions, downloadRegionData, estimateRegionDownload, listDataPacks, updateDataPack, deleteDataPack, listPackJobs } from '../../api/client'
+import { searchRegions, downloadRegionData, estimateRegionDownload, listDataPacks, updateDataPack, deleteDataPack, listPackJobs, listRegionCells, estimateBboxDownload, downloadBboxData } from '../../api/client'
+
+const CUSTOM_BBOX_CODE = '(custom-bbox)'
 
 const LAYER_OPTS = [
   ['imagery', 'Imagery (satellite/aerial XYZ tiles)'],
@@ -19,7 +21,8 @@ const ZOOMS = [12, 13, 14, 15, 16, 17, 18]
 const card = { background: '#0d1117', border: '1px solid #21262d', borderRadius: 6 }
 const fmtBytes = (b) => !b ? '–' : b > 1e9 ? `${(b / 1e9).toFixed(2)} GB` : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} kB`
 
-export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
+export default function RegionDownloadPanel({ preselect, onConsumePreselect,
+                                              incomingBbox, onConsumeBbox, onRequestDrawBbox }) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
   const [results, setResults] = useState([])
@@ -31,6 +34,9 @@ export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
   const [estimate, setEstimate] = useState(null)   // null = no estimate yet; once set, the button switches from "Get estimate" → "Download"
   const [packs, setPacks] = useState([])
   const [jobs, setJobs] = useState([])
+  const [cellsOpen, setCellsOpen] = useState(false)  // "pick a 0.5° sub-cell" drawer after a parent is selected
+  const [cells, setCells] = useState(null)           // {parent, cells, cell_deg} | null
+  const [cellsLoading, setCellsLoading] = useState(false)
   const debRef = useRef(null)
 
   const refreshLibrary = () => {
@@ -52,6 +58,23 @@ export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
     }
   }, [preselect, onConsumePreselect])
 
+  // a bbox drawn on the map (via "Draw on map") arrives here → become the current selection
+  // (treated as a custom-bbox: estimate/download go through /regions/by-bbox/* instead of /regions/{code}/*)
+  useEffect(() => {
+    if (incomingBbox && incomingBbox.length === 4) {
+      const [w, s, e, n] = incomingBbox
+      setOpen(true)
+      setSel({
+        code: CUSTOM_BBOX_CODE,
+        name: `Drawn area · ${w.toFixed(3)},${s.toFixed(3)} → ${e.toFixed(3)},${n.toFixed(3)}`,
+        country: '(custom)',
+        bbox: [w, s, e, n],
+      })
+      setEstimate(null)
+      onConsumeBbox?.()
+    }
+  }, [incomingBbox, onConsumeBbox])
+
   useEffect(() => {
     if (!open) return
     if (debRef.current) clearTimeout(debRef.current)
@@ -61,17 +84,42 @@ export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
     return () => { if (debRef.current) clearTimeout(debRef.current) }
   }, [q, open])
 
-  // Any change to the selection / layers / zoom invalidates a previously-fetched estimate
-  // (the button reverts to "Get download estimate" until the user re-checks).
-  const toggleLayer = (l) => { setEstimate(null); setLayers(prev => prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l]) }
-  const setMaxZoomInvalidating = (z) => { setEstimate(null); setMaxZoom(z) }
-  const setSelInvalidating = (r) => { setEstimate(null); setSel(r) }
+  // Changing the region invalidates the estimate outright (different bbox); changing layers or
+  // max-zoom leaves the estimate visible but marks it stale (see `estimateStale`) so the user can
+  // click "↺ re-estimate" to refresh in place rather than going through a second "Get estimate".
+  const toggleLayer = (l) => setLayers(prev => prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l])
+  const setSelInvalidating = (r) => { setEstimate(null); setSel(r); setCellsOpen(false); setCells(null) }
+
+  // Fetch the 0.5° sub-cells for a parent region (only when the user expands the drawer; the
+  // server computes them on demand so we don't carry tens of thousands in memory by default).
+  const loadCells = async (code) => {
+    if (!code) return
+    setCellsLoading(true)
+    try { setCells(await listRegionCells(code)) }
+    catch { setCells(null) }
+    finally { setCellsLoading(false) }
+  }
+  const expandCells = async () => {
+    setCellsOpen(true)
+    if (!cells && sel?.code && !sel?.cell) await loadCells(sel.code)
+  }
+  const pickCell = (cell) => {
+    setEstimate(null); setSel(cell); setCellsOpen(false)
+  }
+  const estimateStale = !!estimate && (
+    estimate.max_zoom !== maxZoom ||
+    (estimate.layers || []).slice().sort().join(',') !== layers.slice().sort().join(',')
+  )
+
+  const isCustomBbox = sel?.code === CUSTOM_BBOX_CODE
 
   const doEstimate = async () => {
     if (!sel?.code || !layers.length) return
     setBusy(true); setMsg('')
     try {
-      const r = await estimateRegionDownload(sel.code, { layers, max_zoom: maxZoom })
+      const r = isCustomBbox
+        ? await estimateBboxDownload(sel.bbox, { layers, max_zoom: maxZoom, name: sel.name })
+        : await estimateRegionDownload(sel.code, { layers, max_zoom: maxZoom })
       setEstimate(r)
       setMsg(`Estimate for ${sel.name}: ~${fmtBytes(r.total_bytes)} total — review per-item below, then click Download.`)
     } catch (e) {
@@ -83,7 +131,9 @@ export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
     if (!sel?.code || !layers.length) return
     setBusy(true); setMsg('')
     try {
-      const r = await downloadRegionData(sel.code, { layers, max_zoom: maxZoom })
+      const r = isCustomBbox
+        ? await downloadBboxData(sel.bbox, { layers, max_zoom: maxZoom, name: sel.name })
+        : await downloadRegionData(sel.code, { layers, max_zoom: maxZoom })
       const n = (r.jobs || []).filter(j => j.status === 'queued').length
       const skipped = (r.jobs || []).filter(j => j.status !== 'queued')
       setMsg(`Staging ${n} pack job(s) for ${sel.name} — runs on the server; check the library below.` +
@@ -108,12 +158,21 @@ export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
       {open && (
         <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ fontSize: 10, color: '#6e7681', lineHeight: 1.5 }}>
-            Look up a US state / country / region (giant countries are split into sub-regions so a download stays a sane size), tick the layers, and stage the packs. They land in the server's persistent library and survive sessions. <strong>Update is manual only</strong> — nothing auto-refreshes. (Also: right-click the map → "Download mapping data for this region".)
+            Pick a state / country / region (or right-click the map to grab the 0.5° cell over that point — the z17-friendly download unit). After selecting a parent you can drill into its 0.5° cells; the parent itself stays selectable for "do a larger area at once" at lower zooms. Packs land in the server's persistent library and survive sessions. <strong>Update is manual only</strong> — nothing auto-refreshes.
           </div>
 
-          {/* search */}
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="search a state / country / region — e.g. California, France, Russia, Texas…"
-                 style={{ width: '100%', fontSize: 11, padding: '4px 6px', background: '#161b22', border: '1px solid #30363d', borderRadius: 4, color: '#e6edf3', boxSizing: 'border-box' }} />
+          {/* search + draw-bbox shortcut */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="search a state / country / region — e.g. California, France, Russia, Texas…"
+                   style={{ flex: 1, fontSize: 11, padding: '4px 6px', background: '#161b22', border: '1px solid #30363d', borderRadius: 4, color: '#e6edf3', boxSizing: 'border-box' }} />
+            {onRequestDrawBbox && (
+              <button className="btn btn-ghost" onClick={onRequestDrawBbox}
+                      title="Close this dialog and draw a rectangle on the map — the bbox becomes a custom selection you can estimate and download."
+                      style={{ fontSize: 10, padding: '3px 8px', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                ▭ Draw on map
+              </button>
+            )}
+          </div>
           {!sel && (
             <div style={{ ...card, maxHeight: 160, overflowY: 'auto' }}>
               {results.length === 0 && <div style={{ fontSize: 11, color: '#6e7681', padding: 8 }}>No matches.</div>}
@@ -132,8 +191,58 @@ export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                 <b style={{ fontSize: 12, color: '#e6edf3' }}>{sel.name}</b>
                 <span style={{ fontSize: 10, color: '#6e7681' }}>{sel.code} · bbox {sel.bbox?.map(v => v.toFixed(1)).join(', ')}</span>
+                {sel.parent && (
+                  <span style={{ fontSize: 10, color: '#484f58' }}>· in {sel.parent}</span>
+                )}
                 <button className="btn btn-ghost" style={{ marginLeft: 'auto', fontSize: 10, padding: '1px 6px' }} onClick={() => setSelInvalidating(null)}>change</button>
               </div>
+
+              {/* When a *parent* (state/country) is selected, offer to narrow to a 0.5° cell
+                  — that's the z17-friendly download unit. When a cell is selected, offer to
+                  jump back up to its parent (for the "do a larger area at once" case).
+                  Drawn-bbox selections have no parent/cell context — neither affordance applies. */}
+              {isCustomBbox ? null : !sel.cell ? (
+                <div style={{ marginBottom: 6 }}>
+                  <button className="btn btn-ghost" onClick={expandCells}
+                          style={{ fontSize: 10, padding: '2px 6px', color: '#8b949e' }}>
+                    {cellsOpen ? '▾' : '▸'} pick a 0.5° sub-cell within {sel.name} — recommended for z17
+                  </button>
+                  {cellsOpen && (
+                    <div style={{ ...card, marginTop: 4, maxHeight: 180, overflowY: 'auto' }}>
+                      {cellsLoading && <div style={{ fontSize: 10, color: '#6e7681', padding: 6 }}>Loading cells…</div>}
+                      {!cellsLoading && cells && cells.cells?.length === 0 && (
+                        <div style={{ fontSize: 10, color: '#6e7681', padding: 6 }}>
+                          This region is already smaller than one 0.5° cell.
+                        </div>
+                      )}
+                      {!cellsLoading && cells && cells.cells?.length > 0 && (
+                        <>
+                          <div style={{ fontSize: 9, color: '#6e7681', padding: '4px 8px', borderBottom: '1px solid #21262d' }}>
+                            {cells.cells.length} cells · click to pick one (z17 imagery ≈ 150–800 MB per cell)
+                          </div>
+                          {cells.cells.map(c => (
+                            <button key={c.code} onClick={() => pickCell(c)} className="btn btn-ghost"
+                                    style={{ display: 'flex', justifyContent: 'space-between', width: '100%',
+                                             fontSize: 10, padding: '2px 8px', borderRadius: 0,
+                                             borderBottom: '1px solid #161b22', textAlign: 'left' }}>
+                              <span style={{ color: '#c9d1d9' }}>{c.name}</span>
+                              <span style={{ color: '#484f58' }}>{c.code}</span>
+                            </button>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : sel.parent_code && (
+                <div style={{ marginBottom: 6 }}>
+                  <button className="btn btn-ghost"
+                          onClick={() => setSelInvalidating({ code: sel.parent_code, name: sel.parent, bbox: sel.parent_bbox })}
+                          style={{ fontSize: 10, padding: '2px 6px', color: '#8b949e' }}>
+                    ↑ use whole {sel.parent} instead (larger area, lower zooms only)
+                  </button>
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 6 }}>
                 {LAYER_OPTS.map(([l, label]) => (
                   <label key={l} style={{ fontSize: 11, color: '#c9d1d9', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
@@ -144,7 +253,7 @@ export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
               {(layers.includes('imagery') || layers.includes('osm')) && (
                 <label style={{ fontSize: 11, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   Imagery max zoom:
-                  <select value={maxZoom} onChange={e => setMaxZoomInvalidating(Number(e.target.value))} style={{ fontSize: 11 }}>
+                  <select value={maxZoom} onChange={e => setMaxZoom(Number(e.target.value))} style={{ fontSize: 11 }}>
                     {ZOOMS.map(z => <option key={z} value={z}>z{z}{z >= 17 ? ' (very large!)' : z >= 16 ? ' (large)' : ''}</option>)}
                   </select>
                   <span style={{ fontSize: 10, color: '#6e7681' }}>higher = more detail & much bigger download</span>
@@ -152,9 +261,12 @@ export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
               )}
               {/* per-layer download estimate (shown once the user clicks "Get download estimate") */}
               {estimate && (
-                <div style={{ ...card, padding: 6, marginBottom: 6, background: '#161b22' }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: '#8b949e', letterSpacing: 0.5, marginBottom: 4 }}>
-                    ESTIMATE — review before downloading
+                <div style={{ ...card, padding: 6, marginBottom: 6, background: '#161b22',
+                              opacity: estimateStale ? 0.6 : 1 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: '#8b949e', letterSpacing: 0.5, marginBottom: 4,
+                                display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>ESTIMATE — review before downloading</span>
+                    {estimateStale && <span style={{ color: '#f0883e', fontWeight: 600 }}>· settings changed — click ↺ re-estimate</span>}
                   </div>
                   {LAYER_OPTS.filter(([l]) => layers.includes(l)).map(([l, label]) => {
                     const e = estimate.per_layer?.[l]
@@ -183,10 +295,14 @@ export default function RegionDownloadPanel({ preselect, onConsumePreselect }) {
                 </button>
               ) : (
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <button className="btn btn-primary" disabled={busy || !layers.length} onClick={doDownload} style={{ fontSize: 11, padding: '4px 12px', background: '#1f6feb', borderColor: '#1f6feb' }}>
+                  <button className="btn btn-primary" disabled={busy || !layers.length || estimateStale} onClick={doDownload}
+                          title={estimateStale ? 'Settings changed — re-estimate before downloading' : undefined}
+                          style={{ fontSize: 11, padding: '4px 12px', background: '#1f6feb', borderColor: '#1f6feb' }}>
                     {busy ? 'Staging…' : `⬇ Download · ${fmtBytes(estimate.total_bytes)}`}
                   </button>
-                  <button className="btn btn-ghost" onClick={() => setEstimate(null)} style={{ fontSize: 11, padding: '4px 8px' }}>↺ re-estimate</button>
+                  <button className="btn btn-ghost" disabled={busy || !layers.length} onClick={doEstimate} style={{ fontSize: 11, padding: '4px 8px' }}>
+                    {busy ? 'Estimating…' : '↺ re-estimate'}
+                  </button>
                 </div>
               )}
             </div>

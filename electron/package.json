@@ -1,6 +1,6 @@
 {
   "name": "ares",
-  "version": "1.0.0",
+  "version": "5.2.0-alpha",
   "description": "Ares — RF Propagation & Geolocation Platform",
   "main": "main.js",
   "scripts": {

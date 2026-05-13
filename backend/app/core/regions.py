@@ -2,20 +2,29 @@
 core/regions.py — named admin-regions → bounding boxes, for the "download mapping data for a
 state / country / region" feature in the layer manager and the map's right-click menu.
 
-Big countries are split into sub-regions so a single download stays a sane size (a whole-Russia
-imagery pack at street zoom would be absurd; "Russia — Western" / "China — North" etc. are
-practical). The actual download reuses the existing offline-pack pipeline (``core.packs.start_download``
-→ terrain SRTM / imagery XYZ / OSM XYZ / OSM buildings), so the data lands in the persistent
-``PACKS_DIR`` library and survives sessions. There is **no** auto/background refresh — re-fetching a
-newer version is a manual action (``/packs/{id}/update``).
+Two levels of granularity:
+  * **Parents**: US states / European countries / other countries / hand-split sub-regions of the
+    giant countries (Russia, China, …). These are the "larger area at once" option — useful at
+    low-to-mid zoom (z0–z15) where a whole state/country imagery pack is still feasible.
+  * **Cells**: 0.5° × 0.5° sub-cells of any parent, computed on demand. A 0.5° cell at z17 is
+    ~150–800 MB — the "reasonably sized for z17" download unit. Right-click "download this region"
+    returns the cell at the click point so the default behaviour is already z17-friendly.
 
-bbox format throughout: ``[min_lon, min_lat, max_lon, max_lat]``. The boxes are rounded to ~0.1°
-— ample for choosing a download extent — and the catalog is a starter set, trivially extended.
+Cell codes are synthetic and parse to a SW corner: ``c{lat_di:+04d}{lon_di:+05d}`` where the
+ints are deci-degrees of the cell's SW corner (e.g. ``c+0300-0975`` = lat 30.0, lon -97.5). The
+``get_region`` / ``cells_for`` / ``region_at`` helpers all accept cell codes; the download
+pipeline (``core.packs.start_download`` → terrain / imagery / OSM / buildings) gets the same
+``bbox`` shape it always has.
+
+bbox format throughout: ``[min_lon, min_lat, max_lon, max_lat]``.
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Optional
+
+CELL_DEG = 0.5  # sub-cell size; a 0.5° z17 imagery pack is ~150–800 MB depending on latitude
 
 
 def _r(name: str, code: str, country: str, bbox: list[float], *, group: Optional[str] = None,
@@ -216,17 +225,93 @@ CATALOG: list[dict] = _build_catalog()
 _BY_CODE = {r["code"]: r for r in CATALOG}
 
 
+# ── 0.5° sub-cells (computed on demand; not in CATALOG) ──────────────────────
+_CELL_RE = re.compile(r"^c([+-]\d{3})([+-]\d{4})$")
+
+
+def _cell_code(sw_lat: float, sw_lon: float) -> str:
+    return f"c{int(round(sw_lat * 10)):+04d}{int(round(sw_lon * 10)):+05d}"
+
+
+def _parse_cell_code(code: str) -> Optional[tuple[float, float]]:
+    m = _CELL_RE.match(code or "")
+    if not m:
+        return None
+    return int(m.group(1)) / 10.0, int(m.group(2)) / 10.0
+
+
+def _floor_cell(v: float) -> float:
+    return math.floor(v / CELL_DEG) * CELL_DEG
+
+
+def _cell_bbox(sw_lat: float, sw_lon: float) -> list[float]:
+    return [sw_lon, sw_lat, sw_lon + CELL_DEG, sw_lat + CELL_DEG]
+
+
+def _format_cell_name(sw_lat: float, sw_lon: float) -> str:
+    lat_h = "N" if sw_lat >= 0 else "S"
+    lon_h = "E" if sw_lon >= 0 else "W"
+    return f"{CELL_DEG:g}° cell · {abs(sw_lat):.1f}°{lat_h} {abs(sw_lon):.1f}°{lon_h}"
+
+
+def _synth_cell(sw_lat: float, sw_lon: float, parent: Optional[dict] = None) -> dict:
+    """Build the region-dict for a 0.5° cell. `parent` (if given) supplies country/group labels."""
+    if parent is None:
+        # Find the smallest catalogued parent containing the cell centre.
+        clat, clon = sw_lat + CELL_DEG / 2, sw_lon + CELL_DEG / 2
+        hits = [r for r in CATALOG if _in_bbox(clat, clon, r["bbox"])]
+        parent = min(hits, key=lambda r: _bbox_area(r["bbox"])) if hits else None
+    return {
+        "name": _format_cell_name(sw_lat, sw_lon),
+        "code": _cell_code(sw_lat, sw_lon),
+        "country": parent["country"] if parent else "(cell)",
+        "bbox": _cell_bbox(sw_lat, sw_lon),
+        "group": f"{parent['name']} — {CELL_DEG:g}° cells" if parent else f"{CELL_DEG:g}° cells",
+        "parent": parent["name"] if parent else None,
+        "parent_code": parent["code"] if parent else None,
+        "parent_bbox": list(parent["bbox"]) if parent else None,
+        "cell": True,
+    }
+
+
+def cells_for(parent_code: str) -> list[dict]:
+    """Enumerate all 0.5° cells covering a parent region's bbox. Cells share the parent's
+    country/group labels so the UI can render them grouped under the parent."""
+    parent = _BY_CODE.get(parent_code)
+    if not parent:
+        return []
+    w, s, e, n = parent["bbox"]
+    out: list[dict] = []
+    sw_lat = _floor_cell(s)
+    while sw_lat < n:
+        sw_lon = _floor_cell(w)
+        while sw_lon < e:
+            out.append(_synth_cell(sw_lat, sw_lon, parent))
+            sw_lon += CELL_DEG
+        sw_lat += CELL_DEG
+    return out
+
+
 def all_regions() -> list[dict]:
     return [dict(r) for r in CATALOG]
 
 
 def get_region(code: str) -> Optional[dict]:
     r = _BY_CODE.get(code)
-    return dict(r) if r else None
+    if r:
+        return dict(r)
+    # Synthetic sub-cell code (``c{lat_di}{lon_di}``)? Synthesize on demand.
+    parsed = _parse_cell_code(code)
+    if parsed is None:
+        return None
+    sw_lat, sw_lon = parsed
+    return _synth_cell(sw_lat, sw_lon)
 
 
 def search(q: str, limit: int = 40) -> list[dict]:
-    """Substring/word search over region name + code + country."""
+    """Substring/word search over region name + code + country. Returns parents only —
+    sub-cells aren't in the search index (use ``cells_for`` after picking a parent, or
+    right-click the map for the cell at a point)."""
     q = (q or "").strip().lower()
     if not q:
         return all_regions()[:limit]
@@ -251,10 +336,11 @@ def _bbox_area(bbox: list[float]) -> float:
 
 
 def region_at(lat: float, lon: float) -> Optional[dict]:
-    """The smallest catalogued region whose bbox contains the point (so a US state / a giant-country
-    sub-region wins over the country box). None if the point isn't in any catalogued region."""
+    """Right-click "download this region" → the 0.5° sub-cell at the click point, labelled with
+    its containing state/country (so a click in Austin returns a Texas-grouped cell, not the whole
+    state). None if the point isn't in any catalogued parent region."""
     hits = [r for r in CATALOG if _in_bbox(lat, lon, r["bbox"])]
     if not hits:
         return None
-    hits.sort(key=lambda r: _bbox_area(r["bbox"]))
-    return dict(hits[0])
+    parent = min(hits, key=lambda r: _bbox_area(r["bbox"]))
+    return _synth_cell(_floor_cell(lat), _floor_cell(lon), parent)

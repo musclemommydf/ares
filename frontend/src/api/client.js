@@ -326,6 +326,21 @@ export async function estimateRegionDownload(code, params = {}) {
   const { data } = await api.post(`/regions/${encodeURIComponent(code)}/estimate`, params)
   return data
 }
+export async function listRegionCells(code) {
+  // 0.5° sub-cells covering a parent region's bbox (z17-friendly download units).
+  const { data } = await api.get(`/regions/${encodeURIComponent(code)}/cells`)
+  return data
+}
+export async function estimateBboxDownload(bbox, params = {}) {
+  // Freeform bbox (drawn on the map). Same response shape as estimateRegionDownload.
+  const { data } = await api.post('/regions/by-bbox/estimate', { bbox, ...params })
+  return data
+}
+export async function downloadBboxData(bbox, params = {}) {
+  // Stage pack jobs for a freeform bbox — same persistent library as named-region downloads.
+  const { data } = await api.post('/regions/by-bbox/download', { bbox, ...params })
+  return data
+}
 export async function setAtakEnabled(enabled)       { const { data } = await api.post('/atak/enabled', { enabled }); return data }
 
 // ── SDR / DF (Workstream D) ──────────────────────────────────────────────────
