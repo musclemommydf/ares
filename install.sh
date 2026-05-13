@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════════
 # Ares — Linux/macOS Installer
-# Supports: Pop OS 24, Kali Linux, Ubuntu 20+, macOS 12+
+# Tested on: Ubuntu 20.04 / 22.04 / 24.04, Pop!_OS 22.04+, Kali Linux (rolling),
+#            and other Debian/Ubuntu-derived distros (apt); macOS 12+ (Homebrew).
+# Also works on Fedora (dnf) and Arch (pacman) for the Python/Node bootstrap.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
+
+# Run apt/dnf/pacman with sudo only when we're not already root (Kali often runs as root,
+# and `sudo` may not be installed there). On Linux non-root with no sudo → bail with a hint.
+SUDO=""
+if [ "$(id -u 2>/dev/null || echo 1)" != "0" ]; then
+    if command -v sudo >/dev/null 2>&1; then SUDO="sudo"; else SUDO=""; fi
+fi
+maybe_sudo() {  # usage: maybe_sudo apt install -y foo
+    if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then "$@"
+    elif command -v sudo >/dev/null 2>&1; then sudo "$@"
+    else echo "[!] need root for: $*  (install 'sudo' or re-run as root)"; return 1; fi
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOLD='\033[1m'
@@ -24,6 +38,8 @@ ARCH="$(uname -m)"
 
 # ── CLI options ──────────────────────────────────────────────────────────────
 OFFLINE_BUNDLE=""
+WITH_SOAPYSDR=true
+WITH_GPSD=false
 usage() {
     cat <<'EOF'
 Ares ATAK installer
@@ -37,13 +53,35 @@ Options:
                            optionally "terrain/", "users.json", ".auth_secret").
                            Implies an air-gapped install: skips the online
                            terrain pre-download. Pair with ARES_NETWORK_POLICY=offline_only.
+  --no-soapysdr            Skip the SoapySDR install. By default the installer
+                           pulls SoapySDR + the open device modules (rtlsdr, uhd,
+                           hackrf, airspy/airspyhf, plutosdr, bladerf, lms7) on
+                           apt-based distros so the native UAS demod / DF pulls
+                           IQ from a plugged-in SDR straight away. SignalHound
+                           (SoapySDR_SignalHound) and Epiq Sidekiq (SoapySidekiq)
+                           remain vendor-gated — install them per the
+                           manufacturer's instructions.
+  --with-gpsd              (apt only) install gpsd + gpsd-clients so the SDR
+                           console's "USB GPS via gpsd" source just works with a
+                           dongle on /dev/ttyUSB*. (You can also point at the raw
+                           NMEA serial device without gpsd — that needs no extra
+                           package, pyserial is in requirements.txt.)
   -h, --help               Show this help.
+
+Offline / vendored install:
+  If ./vendor/wheels/ exists, Python deps install from it (no pip→network).
+  If ./vendor/npm/frontend/node_modules and ./vendor/npm/electron/node_modules
+  exist, the frontend + Electron trees are restored from them (no npm→network).
+  Populate that bundle on a connected machine first with:  scripts/bundle_vendor.sh
 EOF
 }
 while [ $# -gt 0 ]; do
     case "$1" in
         --offline-bundle) OFFLINE_BUNDLE="${2:-}"; shift 2 ;;
         --offline-bundle=*) OFFLINE_BUNDLE="${1#*=}"; shift ;;
+        --with-soapysdr) WITH_SOAPYSDR=true; shift ;;   # back-compat no-op (now the default)
+        --no-soapysdr) WITH_SOAPYSDR=false; shift ;;
+        --with-gpsd) WITH_GPSD=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) warn "Unknown option: $1"; usage; exit 1 ;;
     esac
@@ -58,7 +96,7 @@ echo ""
 # ── 1. Check Python 3.10+ ─────────────────────────────────────────────────────
 log "Checking Python version..."
 PYTHON=""
-for cmd in python3.12 python3.11 python3.10 python3; do
+for cmd in python3.13 python3.12 python3.11 python3.10 python3; do
     if command -v "$cmd" &>/dev/null; then
         VER=$("$cmd" -c "import sys; print(sys.version_info[:2])")
         if "$cmd" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" 2>/dev/null; then
@@ -73,11 +111,12 @@ if [ -z "$PYTHON" ]; then
     warn "Python 3.10+ not found. Attempting to install..."
     if [ "$OS" = "Linux" ]; then
         if command -v apt &>/dev/null; then
-            sudo apt update && sudo apt install -y python3 python3-pip python3-venv
+            maybe_sudo apt update
+            maybe_sudo apt install -y python3 python3-pip python3-venv || maybe_sudo apt install -y python3 python3-pip python3-full
         elif command -v dnf &>/dev/null; then
-            sudo dnf install -y python3 python3-pip
+            maybe_sudo dnf install -y python3 python3-pip
         elif command -v pacman &>/dev/null; then
-            sudo pacman -Sy --noconfirm python python-pip
+            maybe_sudo pacman -Sy --noconfirm python python-pip
         else
             err "Cannot auto-install Python. Please install Python 3.10+ manually."
         fi
@@ -110,12 +149,18 @@ fi
 if [ "${INSTALL_NODE:-false}" = "true" ]; then
     log "Installing Node.js 20 LTS..."
     if [ "$OS" = "Linux" ] && command -v apt &>/dev/null; then
-        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-        sudo apt install -y nodejs
+        # Try NodeSource (recent Node on Ubuntu/Pop/Debian/Kali); fall back to the distro package.
+        if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+            curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt install -y nodejs || apt install -y nodejs npm
+        elif command -v sudo >/dev/null 2>&1; then
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs || sudo apt install -y nodejs npm
+        else
+            err "need root to install Node.js — install 'sudo', re-run as root, or install Node 18+ manually from https://nodejs.org"
+        fi
     elif [ "$OS" = "Darwin" ] && command -v brew &>/dev/null; then
         brew install node@20
     else
-        err "Please install Node.js 20+ from https://nodejs.org"
+        err "Please install Node.js 18+ from https://nodejs.org"
     fi
     ok "Node.js $(node --version)"
 fi
@@ -159,9 +204,15 @@ VENV_DIR="$SCRIPT_DIR/backend/.venv"
 
 if [ "$OS" = "Linux" ] && command -v apt &>/dev/null; then
     PYTHON_PKG_VER=$($PYTHON -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-    if ! $PYTHON -m venv --help &>/dev/null 2>&1; then
-        log "Installing python${PYTHON_PKG_VER}-venv..."
-        sudo apt install -y "python${PYTHON_PKG_VER}-venv" python3-pip
+    # `python -m venv` may need the matching apt package. Names vary by distro/version
+    # (python3.12-venv on Ubuntu, python3-venv as a fallback, python3-full as a last resort).
+    if ! $PYTHON -m venv --help &>/dev/null 2>&1 || ! $PYTHON -c "import ensurepip" &>/dev/null 2>&1; then
+        log "Installing the venv package for Python ${PYTHON_PKG_VER}..."
+        maybe_sudo apt install -y "python${PYTHON_PKG_VER}-venv" 2>/dev/null \
+            || maybe_sudo apt install -y python3-venv 2>/dev/null \
+            || maybe_sudo apt install -y python3-full 2>/dev/null \
+            || warn "couldn't install a python venv package automatically — if 'python3 -m venv' fails, install python3-venv (or python3-full) for your distro and re-run."
+        maybe_sudo apt install -y python3-pip 2>/dev/null || true
     fi
 fi
 
@@ -189,8 +240,96 @@ if [ "$GPU_FOUND" = "true" ] && [ -n "$CUDA_MAJOR" ]; then
 fi
 
 log "Installing Python dependencies..."
-$PIP install -r "$SCRIPT_DIR/backend/requirements.txt" --quiet
+VENDOR_WHEELS="$SCRIPT_DIR/vendor/wheels"
+if [ -d "$VENDOR_WHEELS" ] && [ -n "$(ls -A "$VENDOR_WHEELS" 2>/dev/null)" ]; then
+    ok "vendor/wheels/ present ($(ls "$VENDOR_WHEELS" | wc -l) wheel(s)) — installing offline"
+    $PIP install --no-index --find-links "$VENDOR_WHEELS" -r "$SCRIPT_DIR/backend/requirements.txt" --quiet \
+        || { warn "offline install from vendor/wheels failed — falling back to online pip"; $PIP install -r "$SCRIPT_DIR/backend/requirements.txt" --quiet; }
+else
+    $PIP install -r "$SCRIPT_DIR/backend/requirements.txt" --quiet
+fi
 ok "Python dependencies installed"
+
+# ── 4a. SoapySDR + open device modules (live IQ from a plugged-in SDR) ──
+# Default-on so the SDR console reads "Backend: soapysdr" instead of "synthetic_iq"
+# the moment a radio is plugged in. Opt out with --no-soapysdr.
+if [ "$WITH_SOAPYSDR" = "true" ]; then
+    if [ "$OS" = "Linux" ] && command -v apt &>/dev/null; then
+        log "Installing SoapySDR + open device modules (rtlsdr / uhd / hackrf / airspy / airspyhf / plutosdr / bladerf / lms7)..."
+        # Each package is installed best-effort so one missing module doesn't fail the run
+        # (older Ubuntu LTS won't have soapysdr-module-airspyhf, for instance).
+        maybe_sudo apt update -qq 2>/dev/null || true
+        # Core: library + Python binding + CLI tools.
+        maybe_sudo apt install -y soapysdr-tools libsoapysdr-dev python3-soapysdr 2>/dev/null || \
+            warn "core SoapySDR packages failed to install — check that universe/community is enabled on this distro."
+        # Open device modules — try each independently so one unavailable package doesn't skip the others.
+        for mod in rtlsdr uhd hackrf airspy airspyhf plutosdr bladerf lms7 mirisdr; do
+            maybe_sudo apt install -y "soapysdr-module-${mod}" 2>/dev/null || \
+                warn "soapysdr-module-${mod} not available on this distro — skipping (the radio family it covers won't be detected unless built from source)."
+        done
+
+        # Mirror the system Python's SoapySDR binding into the venv. python3-soapysdr is a system
+        # package, not a PyPI wheel, so the venv won't see it otherwise. We must probe the *system*
+        # python (not the activated venv's python — `command -v python3` resolves to the venv here),
+        # so try /usr/bin/python3 and friends explicitly, skipping anything inside the venv tree.
+        SYS_PY=""
+        for cand in /usr/bin/python3 /usr/bin/python3.13 /usr/bin/python3.12 /usr/bin/python3.11 /usr/bin/python3.10 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+            if [ -x "$cand" ] && [[ "$cand" != "$VENV_DIR"/* ]]; then SYS_PY="$cand"; break; fi
+        done
+        if [ -n "$SYS_PY" ]; then
+            SOAPY_FILE="$("$SYS_PY" - <<'PYEOF' 2>/dev/null || true
+try:
+    import SoapySDR
+    print(getattr(SoapySDR, "__file__", "") or "")
+except Exception:
+    pass
+PYEOF
+)"
+            if [ -n "$SOAPY_FILE" ] && [ -f "$SOAPY_FILE" ]; then
+                SOAPY_DIR="$(dirname "$SOAPY_FILE")"
+                PY_VER="$($PYTHON -c 'import sys;print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+                SP="$VENV_DIR/lib/python${PY_VER}/site-packages"
+                mkdir -p "$SP"
+                ln -sf "$SOAPY_FILE" "$SP/SoapySDR.py" 2>/dev/null || true
+                # The compiled extension lives alongside SoapySDR.py — name varies by Python ABI tag.
+                for so in "$SOAPY_DIR"/_SoapySDR*.so; do
+                    [ -f "$so" ] && ln -sf "$so" "$SP/$(basename "$so")" 2>/dev/null || true
+                done
+                # Sanity-check: can the venv import it now?
+                if "$VENV_DIR/bin/python" -c "import SoapySDR" 2>/dev/null; then
+                    ok "SoapySDR exposed to venv ($SOAPY_FILE)"
+                else
+                    warn "Linked SoapySDR into the venv but import still fails — try 'apt install python3-soapysdr' and re-run."
+                fi
+            else
+                warn "python3-soapysdr is installed but the Python binding wasn't found in the system Python — the venv won't see Soapy until it is."
+            fi
+        fi
+        ok "SoapySDR installed (RTL-SDR / USRP / HackRF / Airspy / AirspyHF / Pluto / BladeRF / LimeSDR work out of the box; SignalHound + Epiq Sidekiq need vendor packages)."
+    elif [ "$OS" = "Linux" ]; then
+        warn "Not an apt-based distro — install SoapySDR manually: the package names vary (Fedora: 'SoapySDR python3-SoapySDR soapy-sdr-module-*'; Arch: 'soapysdr python-soapysdr soapyrtlsdr soapyuhd soapyhackrf soapyairspy soapyplutosdr'). After install, the venv will pick up the binding on next launch."
+    elif [ "$OS" = "Darwin" ]; then
+        if command -v brew &>/dev/null; then
+            log "Installing SoapySDR via Homebrew (open device modules included)..."
+            brew install soapysdr 2>/dev/null || warn "brew install soapysdr failed — install manually."
+            warn "macOS: the SoapySDR Python binding from Homebrew may need 'pip install --upgrade SoapySDR' from a wheel or a from-source build — until then the SDR console may stay on synthetic_iq."
+        else
+            warn "Homebrew not found — install brew, then 'brew install soapysdr'."
+        fi
+    fi
+fi
+
+# ── 4a'. Optional: gpsd (so a USB GPS dongle is plug-and-play under the SDR console) ──
+if [ "$WITH_GPSD" = "true" ]; then
+    if [ "$OS" = "Linux" ] && command -v apt &>/dev/null; then
+        log "Installing gpsd + gpsd-clients..."
+        maybe_sudo apt install -y gpsd gpsd-clients 2>/dev/null && \
+            ok "gpsd installed — plug a USB GPS dongle in and choose 'USB GPS via gpsd' in the SDR console." || \
+            warn "gpsd install failed — install it manually with 'apt install gpsd gpsd-clients'."
+    else
+        warn "--with-gpsd only auto-installs on apt-based distros."
+    fi
+fi
 
 # ── 4b. Preserve user data ───────────────────────────────────────────────────
 # Save states are JSON files downloaded to the user's filesystem — never touched here.
@@ -229,7 +368,15 @@ fi
 # ── 5. Frontend dependencies ──────────────────────────────────────────────────
 log "Installing frontend dependencies..."
 cd "$SCRIPT_DIR/frontend"
-npm install --silent
+VENDOR_FE="$SCRIPT_DIR/vendor/npm/frontend/node_modules"
+if [ -d "$VENDOR_FE" ] && [ -z "${ARES_VENDOR_REFRESH:-}" ]; then
+    ok "vendor/npm/frontend/node_modules present ($(du -sh "$VENDOR_FE" 2>/dev/null | cut -f1)) — restoring offline"
+    rm -rf node_modules
+    if command -v rsync >/dev/null 2>&1; then rsync -a "$VENDOR_FE"/ node_modules/
+    else cp -a "$VENDOR_FE" node_modules; fi
+else
+    npm install --silent
+fi
 ok "Frontend npm packages installed"
 
 # ── 6. Build frontend ─────────────────────────────────────────────────────────
@@ -240,7 +387,15 @@ ok "Frontend built"
 # ── 7. Electron (desktop app) ─────────────────────────────────────────────────
 log "Installing Electron desktop dependencies..."
 cd "$SCRIPT_DIR/electron"
-npm install --silent
+VENDOR_EL="$SCRIPT_DIR/vendor/npm/electron/node_modules"
+if [ -d "$VENDOR_EL" ] && [ -z "${ARES_VENDOR_REFRESH:-}" ]; then
+    ok "vendor/npm/electron/node_modules present ($(du -sh "$VENDOR_EL" 2>/dev/null | cut -f1)) — restoring offline"
+    rm -rf node_modules
+    if command -v rsync >/dev/null 2>&1; then rsync -a "$VENDOR_EL"/ node_modules/
+    else cp -a "$VENDOR_EL" node_modules; fi
+else
+    npm install --silent
+fi
 ok "Electron packages installed"
 
 # ── 8. Create startup scripts ─────────────────────────────────────────────────
