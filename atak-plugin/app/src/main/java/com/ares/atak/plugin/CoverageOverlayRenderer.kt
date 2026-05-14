@@ -1,24 +1,27 @@
 package com.ares.atak.plugin
 
+import android.content.Context
 import com.ares.atak.plugin.net.CoverageResponse
-import kotlinx.serialization.json.JsonObject
+import com.atakmap.android.maps.MapGroup
+import com.atakmap.android.maps.MapView
+import com.atakmap.android.maps.Marker
+import com.atakmap.coremap.maps.coords.GeoPoint
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * ARES-ATAK — turn an Ares coverage GeoJSON into something ATAK can draw (skeleton).
+ * ARES-ATAK — turn an Ares coverage GeoJSON into ATAK map items.
  *
- * Two strategies (mirrors SOOTHSAYER's options):
- *   1. **vector** — parse the Point FeatureCollection and add graduated
- *      `Polyline`/circle map items to an overlay `MapGroup` ("ARES" group);
- *      restyleable, no server change. (Recommended default.)
- *   2. **raster KMZ** — call `AresApiClient.exportKmz(...)`, drop the .kmz into
- *      `atak/ARES/KMZ/`, and let ATAK import it as an "Image Overlay File";
- *      pixel-for-pixel with the SOOTHSAYER look, sendable to contacts.
+ * Default strategy: parse the Point FeatureCollection and add coloured
+ * [Marker]s to a child [MapGroup] under "ARES" — one per covered point. The
+ * marker colour is graduated by signal strength so the overlay reads at a
+ * glance, matching the web UI's heatmap.
  *
- * This skeleton only parses + summarises; the actual MapItem creation needs the
- * `com.atakmap.android.maps.*` SDK classes.
+ * Alternative (raster): use [com.ares.atak.plugin.net.AresApiClient.exportKmz]
+ * to fetch the SOOTHSAYER-style raster KMZ and drop it into `atak/ARES/KMZ/`
+ * for ATAK's standard Image-Overlay importer. That's wired separately on the
+ * Coverage tab.
  */
 object CoverageOverlayRenderer {
 
@@ -39,21 +42,61 @@ object CoverageOverlayRenderer {
         return Summary(feats.size, covered, maxS, minS)
     }
 
-    /** TODO(P1): build the ATAK overlay. Pseudocode:
-     *
-     *   val group = mapView.rootGroup.findMapGroup("ARES") ?: mapView.rootGroup.addGroup("ARES")
-     *   group.clearItems()
-     *   for (f in features where covered) {
-     *       val (lon, lat) = f.coordinates
-     *       val c = signalToColor(f.signal_dbm)            // ramp matching the web UI
-     *       group.addItem(Marker(GeoPoint(lat, lon)).apply { setColor(c); setMetaBoolean("addToObjList", false) })
-     *   }
-     *   // or render contour bands as DrawingShapes; or import the KMZ as an ImageOverlay.
-     */
-    fun render(/* mapView: MapView, */ resp: CoverageResponse, layerName: String): Summary {
+    /** Render `resp` into the "ARES" overlay MapGroup under [layerName]. Replaces
+     *  any prior layer with the same name (Co-Opt re-runs land here). */
+    fun render(mapView: MapView, pluginContext: Context, resp: CoverageResponse, layerName: String): Summary {
         val s = summarize(resp)
-        // android.util.Log.i("ARES", "coverage layer '$layerName': ${s.covered}/${s.points} covered, " +
-        //     "signal ${s.minSignalDbm}..${s.maxSignalDbm} dBm — TODO render to ATAK overlay")
+        val root = mapView.rootGroup
+        val parent = root.findMapGroup(AresMapComponent.OVERLAY_GROUP)
+            ?: root.addGroup(AresMapComponent.OVERLAY_GROUP)
+
+        // Replace prior layer with the same name (Co-Opt reruns / Edit RF re-applies).
+        parent.findMapGroup(layerName)?.let { parent.removeGroup(it) }
+        val layer = parent.addGroup(layerName)
+        layer.setMetaBoolean("addToObjList", true)
+        layer.setMetaString("aresLayer", "coverage")
+
+        val feats = resp.geojson?.get("features")?.jsonArray ?: return s
+        var idx = 0
+        for (f in feats) {
+            val obj = f.jsonObject
+            val coords = obj["geometry"]?.jsonObject?.get("coordinates")?.jsonArray ?: continue
+            if (coords.size < 2) continue
+            val lon = coords[0].jsonPrimitive.content.toDoubleOrNull() ?: continue
+            val lat = coords[1].jsonPrimitive.content.toDoubleOrNull() ?: continue
+            val props = obj["properties"]?.jsonObject
+            val isCov = props?.get("covered")?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true
+            if (!isCov) continue
+            val sig = props?.get("signal_dbm")?.jsonPrimitive?.content?.toDoubleOrNull()
+            val m = Marker(GeoPoint(lat, lon), "$layerName:${idx++}").apply {
+                setColor(signalToColor(sig))
+                setMetaBoolean("addToObjList", false)
+                setMetaString("aresLayer", layerName)
+                setMetaBoolean("readiness", true)
+                setType("u-d-p")              // generic "point" CoT type so ATAK doesn't try to be clever
+                setTitle("${sig?.let { "%.1f dBm".format(it) } ?: "covered"}")
+            }
+            layer.addItem(m)
+        }
         return s
+    }
+
+    /** Remove an ARES coverage layer by name (used by CoOptManager.release). */
+    fun remove(mapView: MapView, layerName: String) {
+        val parent = mapView.rootGroup.findMapGroup(AresMapComponent.OVERLAY_GROUP) ?: return
+        parent.findMapGroup(layerName)?.let { parent.removeGroup(it) }
+    }
+
+    /** Signal-strength → ARGB. Ramp roughly matches the web UI: red (strong) →
+     *  yellow → green → blue (weak/edge of coverage). */
+    private fun signalToColor(signalDbm: Double?): Int {
+        val s = signalDbm ?: return 0xFF06D6A0.toInt()         // teal-green fallback
+        return when {
+            s >= -60 -> 0xFFEF4444.toInt()
+            s >= -75 -> 0xFFF59E0B.toInt()
+            s >= -90 -> 0xFFEAB308.toInt()
+            s >= -100 -> 0xFF06D6A0.toInt()
+            else -> 0xFF3B82F6.toInt()
+        }
     }
 }

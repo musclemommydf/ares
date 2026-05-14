@@ -55,6 +55,60 @@ def set_iq_provider(fn: Optional[Callable]) -> None:
     IQ_PROVIDER = fn
 
 
+# ── Spectrum max-hold accumulator ────────────────────────────────────────────
+# A common pattern when hunting FPV video on a sparse band: scan repeatedly and
+# accumulate the maximum power per bin across sweeps so that intermittent or
+# frequency-hopping signals "draw themselves in" over time. Keyed by session so
+# multiple concurrent scans don't collide.
+_MAXHOLD_STATE: dict[str, dict] = {}
+
+
+def reset_max_hold(key: str = "default") -> None:
+    """Clear the named max-hold accumulator (next scan starts fresh)."""
+    _MAXHOLD_STATE.pop(key, None)
+
+
+def get_max_hold(key: str = "default") -> Optional[dict]:
+    """Return the current max-hold snapshot for `key`, or None if not started.
+    Shape: {start_hz, stop_hz, n_bins, freq_hz: [...], power_dbm: [...], sweeps, last_t}."""
+    st = _MAXHOLD_STATE.get(key)
+    if not st:
+        return None
+    return {
+        "start_hz": st["start_hz"], "stop_hz": st["stop_hz"],
+        "n_bins": int(st["power"].size),
+        "freq_hz": [round(float(v), 1) for v in st["freq"]],
+        "power_dbm": [round(float(v), 2) for v in st["power"]],
+        "sweeps": int(st["sweeps"]), "last_t": st["last_t"],
+    }
+
+
+def list_max_hold() -> list[str]:
+    return sorted(_MAXHOLD_STATE.keys())
+
+
+def _maxhold_update(key: str, start_hz: float, stop_hz: float, n_bins: int,
+                    freqs: np.ndarray, powers: np.ndarray) -> None:
+    """Merge a freshly captured PSD chunk into the persistent max-hold grid.
+    `freqs` and `powers` are 1-D arrays of equal length covering some sub-span;
+    the grid spans [start_hz, stop_hz] with `n_bins` points."""
+    if freqs.size == 0 or powers.size != freqs.size:
+        return
+    st = _MAXHOLD_STATE.get(key)
+    grid_n = max(256, int(n_bins))
+    grid_f = np.linspace(start_hz, stop_hz, grid_n)
+    if st is None or st["power"].size != grid_n or st["start_hz"] != start_hz or st["stop_hz"] != stop_hz:
+        st = {"start_hz": float(start_hz), "stop_hz": float(stop_hz),
+              "freq": grid_f, "power": np.full(grid_n, -200.0, dtype=np.float32),
+              "sweeps": 0, "last_t": time.time()}
+    # Resample incoming powers onto the persistent grid, then max-merge.
+    p = np.interp(grid_f, freqs, powers, left=-200.0, right=-200.0).astype(np.float32)
+    st["power"] = np.maximum(st["power"], p)
+    st["sweeps"] = int(st["sweeps"]) + 1
+    st["last_t"] = time.time()
+    _MAXHOLD_STATE[key] = st
+
+
 def set_ml_classifier(fn: Optional[Callable]) -> None:
     """Register (or clear) the optional ML signal classifier — see ``ML_CLASSIFIER``."""
     global ML_CLASSIFIER
@@ -672,11 +726,27 @@ def _iq_features(device: dict, center_hz: float, bw_hz: float) -> Optional[dict]
 
 
 def classify_band(device: Optional[dict], start_hz: float, stop_hz: float, *,
-                  step_hz: float = 20e6, n_bins: int = 4096, use_iq: bool = True) -> dict:
+                  step_hz: float = 20e6, n_bins: int = 4096, use_iq: bool = True,
+                  max_hold: bool = False, maxhold_key: str = "default",
+                  reset_maxhold: bool = False) -> dict:
+    """Scan [start_hz, stop_hz] for occupied channels and classify each.
+
+    When `max_hold=True`, each per-step PSD is merged into a persistent
+    accumulator keyed by `maxhold_key` (a max() across successive sweeps).
+    This makes intermittent or hopping FPV/UAS downlinks far easier to spot:
+    over a few sweeps the band "draws itself in" even if individual sweeps
+    miss the transmitter.
+
+    Set `reset_maxhold=True` to clear the accumulator before this sweep.
+    The returned dict gains a `max_hold` field with the current accumulator
+    snapshot when `max_hold=True`.
+    """
     device = device or {"id": "synthetic", "metadata": {}}
     start_hz, stop_hz = float(min(start_hz, stop_hz)), float(max(start_hz, stop_hz))
     span_total = max(1e6, stop_hz - start_hz)
     step_hz = float(min(max(1e6, step_hz), 40e6))
+    if max_hold and reset_maxhold:
+        reset_max_hold(maxhold_key)
     detections: list[dict] = []
     fr: dict = {}
     f = start_hz + step_hz / 2.0
@@ -684,6 +754,13 @@ def classify_band(device: Optional[dict], start_hz: float, stop_hz: float, *,
     while f - step_hz / 2.0 < stop_hz and guard < 256:
         guard += 1
         fr = dsp.spectrum_frame(device, f, step_hz, n_bins)
+        # Accumulate this step into the max-hold grid (if requested).
+        if max_hold:
+            powers = np.asarray(fr.get("power_dbm", []), dtype=np.float32)
+            if powers.size:
+                # Spectrum_frame returns power vs. bin index over the local step span.
+                step_freqs = f - step_hz / 2 + (np.arange(powers.size) + 0.5) * (step_hz / powers.size)
+                _maxhold_update(maxhold_key, start_hz, stop_hz, n_bins, step_freqs, powers)
         for (lo, hi, pk, mean, std, seg) in _occupied_bands(fr.get("power_dbm", []), f, step_hz):
             if lo < start_hz - 1e6 or hi > stop_hz + 1e6:
                 continue
@@ -698,10 +775,32 @@ def classify_band(device: Optional[dict], start_hz: float, stop_hz: float, *,
             continue
         kept.append(d)
     kept.sort(key=lambda d: d["center_hz"])
+    # If max-hold is active, also extract detections from the *accumulated* spectrum.
+    maxhold_snap = None
+    if max_hold:
+        maxhold_snap = get_max_hold(maxhold_key)
+        # Re-run occupied-band detection over the entire accumulated grid so that
+        # weak intermittents that no single sweep saw clearly become visible.
+        if maxhold_snap is not None and maxhold_snap["power_dbm"]:
+            mh_powers = maxhold_snap["power_dbm"]
+            mh_center = 0.5 * (start_hz + stop_hz)
+            mh_span = stop_hz - start_hz
+            for (lo, hi, pk, mean, std, seg) in _occupied_bands(mh_powers, mh_center, mh_span):
+                if lo < start_hz - 1e6 or hi > stop_hz + 1e6:
+                    continue
+                iqf = _iq_features(device, 0.5 * (lo + hi), max(1e6, hi - lo)) if use_iq else None
+                cand = _classify_segment(lo, hi, pk, mean, std, seg, iqf)
+                cand["from_max_hold"] = True
+                # Merge if this hit doesn't already collide with an existing detection.
+                if not any(abs(cand["center_hz"] - k["center_hz"]) <
+                            0.5 * (cand["bandwidth_hz"] + k["bandwidth_hz"]) * 0.6 for k in kept):
+                    kept.append(cand)
+            kept.sort(key=lambda d: d["center_hz"])
     return {
         "start_hz": start_hz, "stop_hz": stop_hz, "n_detections": len(kept),
         "detections": kept, "source": fr.get("source", "synthetic"),
         "iq_backend": _capture_backend() if use_iq else "off",
+        "max_hold": maxhold_snap,
     }
 
 
@@ -773,21 +872,30 @@ def _capture_backend() -> str:
         return "synthetic_iq"
 
 
-def _native_demod_decode(feed: dict, device: dict, frequency_hz: float, bw_hz: float, channel: int) -> dict:
+def _native_demod_decode(feed: dict, device: dict, frequency_hz: float, bw_hz: float, channel: int,
+                          *, analog_options: Optional[dict] = None,
+                          capture_seconds: float = 0.045) -> dict:
     """Capture a baseband snapshot and run Ares' in-process software demod over it
     (sdr/native_demod). Returns the demod result dict (already JSON-safe except for any
-    'frames' / 'byte_stream' which the caller strips)."""
+    'frames' / 'byte_stream' which the caller strips).
+
+    ``analog_options`` forwards analog-video demod knobs. ``capture_seconds`` overrides
+    the default 45 ms capture (longer captures = more frames per decode pass)."""
     from . import native_demod
     rate = float(max(2.0e6, min(40.0e6, (bw_hz or 8.0e6) * 1.4)))
-    n = int(max(1 << 14, min(1 << 21, rate * 0.045)))   # ~45 ms
+    n_secs = max(0.020, min(0.5, float(capture_seconds)))
+    n = int(max(1 << 14, min(1 << 22, rate * n_secs)))
     iq = _capture_iq(device, float(frequency_hz), rate, n, int(channel))
     if iq is None:
         return {"ok": False, "error": "no IQ available to demodulate"}
-    return native_demod.decode_feed(feed, iq, rate, max_frames=6)
+    return native_demod.decode_feed(feed, iq, rate, max_frames=8,
+                                     analog_options=analog_options)
 
 
 def start_decode(device: Optional[dict], frequency_hz: float, feed_type: Optional[str] = None, *,
-                 bandwidth_hz: Optional[float] = None, channel: int = 0, label: str = "") -> dict:
+                 bandwidth_hz: Optional[float] = None, channel: int = 0, label: str = "",
+                 analog_options: Optional[dict] = None,
+                 capture_seconds: float = 0.045) -> dict:
     auto = None
     if not feed_type or feed_type in ("auto", "auto_detect"):
         auto = auto_detect_feed(device, frequency_hz, bandwidth_hz)
@@ -820,7 +928,13 @@ def start_decode(device: Optional[dict], frequency_hz: float, feed_type: Optiona
     else:
         # Decode in-process with Ares' own software demodulator (sdr/native_demod) —
         # no SoapySDR / leandvb / DVB-T(2) receiver / SDRangel / ffmpeg / TSDuck needed.
-        demod = _native_demod_decode(f, device, frequency_hz, bw, channel)
+        # Tag the analog session_key so frame-averaging persists across re-decodes.
+        ao = dict(analog_options or {})
+        ao.setdefault("session_key", sid)
+        demod = _native_demod_decode(f, device, frequency_hz, bw, channel,
+                                       analog_options=ao, capture_seconds=capture_seconds)
+        sess["analog_options"] = ao
+        sess["capture_seconds"] = float(capture_seconds)
         # stash any decoded frames as PNGs for the stream endpoint, then strip the heavy arrays
         frames = demod.pop("frames", None) or []
         try:
@@ -871,7 +985,50 @@ def get_session(sid: str) -> Optional[dict]:
 
 def stop_session(sid: str) -> bool:
     _SESSION_FRAMES.pop(sid, None)
+    try:
+        from . import native_demod as _nd
+        _nd.reset_frame_average(sid)
+    except Exception:
+        pass
     return _SESSIONS.pop(sid, None) is not None
+
+
+def redemod_session(sid: str, *, analog_options: Optional[dict] = None,
+                    capture_seconds: Optional[float] = None) -> Optional[dict]:
+    """Re-capture and re-demodulate an existing session with updated analog options.
+
+    Useful when the user tweaks colour decode, scanline rate, frame averaging, or
+    peak-hold τ on a running session — we rerun the demod over a fresh capture and
+    refresh the cached frame PNGs without tearing the session down.
+    """
+    sess = _SESSIONS.get(sid)
+    if not sess:
+        return None
+    f = _FEED_BY_ID.get(sess["feed_type"])
+    if not f or not f.get("decodable"):
+        return sess
+    device = {"id": sess.get("device_id") or "synthetic", "metadata": {}}
+    prev = dict(sess.get("analog_options") or {})
+    if analog_options:
+        prev.update(analog_options)
+    prev["session_key"] = sid
+    secs = float(capture_seconds if capture_seconds is not None else sess.get("capture_seconds") or 0.045)
+    demod = _native_demod_decode(f, device, sess["frequency_hz"], sess["bandwidth_hz"], sess.get("channel", 0),
+                                  analog_options=prev, capture_seconds=secs)
+    frames = demod.pop("frames", None) or []
+    try:
+        from . import native_demod as _nd
+        pngs = [p for p in (_nd.to_png(fr) for fr in frames) if p]
+    except Exception:
+        pngs = []
+    if pngs:
+        _SESSION_FRAMES[sid] = pngs
+    sess["demod"] = demod
+    sess["analog_options"] = prev
+    sess["capture_seconds"] = secs
+    if demod.get("ok") and demod.get("kind") == "analog" and pngs:
+        sess["video_url"] = f"/api/v1/uas/sessions/{sid}/frame.png"
+    return dict(sess)
 
 
 def session_frames(sid: str) -> list[bytes]:

@@ -1,13 +1,10 @@
-# Ares v2.0 — "Authoritative" rewrite
+# Ares
 
-This codebase (`ares`, `app_version = 2.0.0`, installer **v5.0**) replaces the
-*indicative* implementations the [feature critique](./BUILD_PLAN.md) flagged with rigorous,
-reference-grade ones, and adds the multilateration / measured-pattern / TLS pieces that were
-missing entirely. It is API- and UI-compatible with v1.x — the frontend, the SDR/DF pipeline,
-the ATAK plugin and the offline-pack machinery are unchanged; what changed is *what the physics
-and geometry actually compute*.
+A reference walkthrough of what the propagation, geolocation, SDR, and
+distributed-sensing pieces in this codebase actually compute — module by
+module — and where each one stands (rigorous · approximate · pending hardware).
 
-Run the validation harness: `cd backend && python -m tests.test_authoritative` (28 checks).
+Run the validation harness: `cd backend && python -m tests.test_authoritative`.
 
 ---
 

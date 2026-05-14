@@ -10,6 +10,8 @@ import { signalToColor } from '../../api/client'
 import CoverageLegend from './CoverageLegend'
 import { useViewMode } from '../../hooks/useViewMode'
 import { BASEMAPS as TILE_LAYERS, DEFAULT_MAP_COLORS, useMapPrefs } from './mapPrefs'
+import CompassRose from './CompassRose'
+import { useTrackHistory, trackPositionAt } from '../../store/trackHistory'
 import MapSettingsCog from './MapSettingsCog'
 import { makeSidcIcon } from './NatoSymbols'
 import { geocodeNominatim } from '../../utils/geocode'
@@ -30,6 +32,7 @@ import { formatCoordinate, toDDM, autoParseCoordinate, toMGRSAt, mgrsPrecisionFo
 
 // milsymbol is large (~860 kB unminified). Defer until the picker is opened.
 const NatoSymbolPicker = lazy(() => import('./NatoSymbolPicker'))
+import ErrorBoundary from '../Common/ErrorBoundary'
 
 // DEFAULT_MAP_COLORS + TILE_LAYERS + geocodeNominatim are shared with the 3D
 // globe — see ./mapPrefs and ../../utils/geocode.
@@ -56,46 +59,8 @@ function makeTxIcon(color = '#00b4d8') {
 }
 
 // Semi-transparent compass rose overlay
-function CompassRose({ size = 90 }) {
-  const ticks = Array.from({ length: 16 }, (_, i) => {
-    const angle = (i * 22.5) * Math.PI / 180
-    const isCardinal = i % 4 === 0
-    const r1 = isCardinal ? 43 : 46
-    const r2 = 48
-    return {
-      x1: 50 + r1 * Math.sin(angle), y1: 50 - r1 * Math.cos(angle),
-      x2: 50 + r2 * Math.sin(angle), y2: 50 - r2 * Math.cos(angle),
-      w: isCardinal ? 1.5 : 0.8,
-    }
-  })
-  return (
-    <svg width={size} height={size} viewBox="0 0 100 100"
-         style={{ filter: 'drop-shadow(0 0 5px rgba(0,0,0,0.9))' }}>
-      <circle cx="50" cy="50" r="48" fill="rgba(0,0,0,0.25)" stroke="#fff" strokeWidth="0.8" strokeOpacity="0.4"/>
-      {ticks.map((t, i) => (
-        <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2}
-              stroke="#fff" strokeWidth={t.w} opacity="0.5"/>
-      ))}
-      {/* N arrow (red tip up) */}
-      <polygon points="50,8 53.5,44 50,40 46.5,44" fill="#ef4444"/>
-      <polygon points="50,40 53.5,44 50,48 46.5,44" fill="#fff" opacity="0.85"/>
-      {/* S arrow */}
-      <polygon points="50,92 53.5,56 50,60 46.5,56" fill="#fff" opacity="0.7"/>
-      <polygon points="50,60 53.5,56 50,52 46.5,56" fill="#aaa" opacity="0.7"/>
-      {/* E arrow */}
-      <polygon points="92,50 56,53.5 60,50 56,46.5" fill="#fff" opacity="0.7"/>
-      <polygon points="60,50 56,53.5 52,50 56,46.5" fill="#aaa" opacity="0.7"/>
-      {/* W arrow */}
-      <polygon points="8,50 44,53.5 40,50 44,46.5" fill="#fff" opacity="0.7"/>
-      <polygon points="40,50 44,53.5 48,50 44,46.5" fill="#aaa" opacity="0.7"/>
-      <circle cx="50" cy="50" r="3.5" fill="#fff" opacity="0.9"/>
-      <text x="50" y="20" textAnchor="middle" fill="#ef4444" fontSize="13" fontWeight="bold" fontFamily="sans-serif">N</text>
-      <text x="50" y="88" textAnchor="middle" fill="#fff" fontSize="11" opacity="0.75" fontFamily="sans-serif">S</text>
-      <text x="84" y="54" textAnchor="middle" fill="#fff" fontSize="11" opacity="0.75" fontFamily="sans-serif">E</text>
-      <text x="16" y="54" textAnchor="middle" fill="#fff" fontSize="11" opacity="0.75" fontFamily="sans-serif">W</text>
-    </svg>
-  )
-}
+// CompassRose moved to ./CompassRose.jsx so the 3D globe can render it with
+// live camera heading. Imported below.
 
 // Great-circle bearing between two points
 function bearing(lat1, lon1, lat2, lon2) {
@@ -199,6 +164,9 @@ export default function MapView({
   onAddEmitter,      // (lat, lon) → place/move primary emitter
   onAddLoBObserver,  // (lat, lon) → pre-fill LoB observer location
   onDownloadRegionAt,  // (lat, lon) → open the Layer Manager and pre-select the region containing that point
+  onViewshedAt,        // (lat, lon) → compute and overlay viewshed from this point
+  onContoursAt,        // (lat, lon) → compute and overlay contour lines around this point
+  onSimulatePropagationFromFix,   // (groupSummary, lat, lon) → attach a propagation TX that tracks this fix/cut
   onAddLoBAzimuthTarget,  // (lat, lon) → set the bearing target for the LoB form
   // Map display options (now in the floating-toolbar ⚙ MapSettingsCog)
   showCompassRose = false, setShowCompassRose,
@@ -784,11 +752,81 @@ export default function MapView({
     drawCtrlRef.current?.setStyle({ color: toolsStrokeColor })
   }, [toolsStrokeColor])
 
+  // ── Track-history rendering ──────────────────────────────────────────────
+  // Subscribes to useTrackHistory and renders each visible track as a polyline.
+  // During playback, also renders a "now" marker at the interpolated position.
+  const tracks = useTrackHistory((s) => s.tracks)
+  const trackPlayback = useTrackHistory((s) => s.playback)
+  const trackLayersRef = useRef(new Map())   // trackId → { line, dot, nowMarker }
+  useEffect(() => {
+    const map = leafletRef.current; if (!map) return
+    const layers = trackLayersRef.current
+    // Remove layers for deleted tracks
+    for (const [id, rec] of layers) {
+      if (!tracks[id]) {
+        try { rec.line?.remove(); rec.dot?.remove(); rec.nowMarker?.remove() } catch {}
+        layers.delete(id)
+      }
+    }
+    // Add / update layers for current tracks
+    for (const tr of Object.values(tracks)) {
+      let rec = layers.get(tr.id)
+      const pts = tr.points.map(p => [p.lat, p.lon])
+      if (!rec) {
+        const line = L.polyline(pts, { color: tr.color, weight: 2.5, opacity: 0.9 })
+        rec = { line, dot: null, nowMarker: null }
+        layers.set(tr.id, rec)
+      } else {
+        rec.line.setLatLngs(pts)
+        rec.line.setStyle({ color: tr.color })
+      }
+      if (tr.visible && pts.length > 0) {
+        if (!map.hasLayer(rec.line)) rec.line.addTo(map)
+      } else {
+        if (map.hasLayer(rec.line)) rec.line.remove()
+      }
+    }
+    // Playback now-marker (a brighter dot at the interpolated position)
+    if (trackPlayback) {
+      const tr = tracks[trackPlayback.trackId]
+      if (tr) {
+        const p = trackPositionAt(tr, trackPlayback.t)
+        const rec = layers.get(tr.id)
+        if (p && rec) {
+          if (!rec.nowMarker) {
+            rec.nowMarker = L.circleMarker([p.lat, p.lon], {
+              radius: 7, color: '#fff', weight: 2,
+              fillColor: tr.color, fillOpacity: 1,
+            }).addTo(map)
+          } else {
+            rec.nowMarker.setLatLng([p.lat, p.lon])
+            if (!map.hasLayer(rec.nowMarker)) rec.nowMarker.addTo(map)
+          }
+        }
+      }
+    } else {
+      // No playback → remove any now-markers
+      for (const rec of layers.values()) {
+        if (rec.nowMarker) { try { rec.nowMarker.remove() } catch {}; rec.nowMarker = null }
+      }
+    }
+  }, [tracks, trackPlayback])
+
   // Esc cancels active draw tool
   useEffect(() => {
     if (!toolsActive) return
     const handler = (e) => {
-      if (e.key === 'Escape') drawCtrlRef.current?.deactivate()
+      if (e.key === 'Escape') {
+        const ctrl = drawCtrlRef.current
+        // Esc unwinds one layer at a time so the operator can recover from
+        // any intermediate state without losing the tool:
+        //   1) finish edit-mode first (if a shape is being resized)
+        //   2) cancel an in-progress shape (preserves the active tool)
+        //   3) deactivate the tool itself
+        if (ctrl?.getEditingId && ctrl.getEditingId()) ctrl.exitEditMode()
+        else if (ctrl?.hasScratch && ctrl.hasScratch()) ctrl.cancelCurrent()
+        else ctrl?.deactivate()
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -969,13 +1007,20 @@ export default function MapView({
     URL.revokeObjectURL(url)
   }
 
-  // Apply map brightness to the tile pane
+  // Apply map brightness + night-vision filter to the tile pane. Night vision
+  // composes a red palette via sepia(1) hue-rotate(310deg) saturate(5) — same
+  // trick TAK uses for dark-adaptation preservation. Brightness still applies.
+  const nightVision = useMapPrefs((s) => s.nightVision)
   useEffect(() => {
     const map = leafletRef.current
     if (!map) return
     const pane = map.getPane('tilePane')
-    if (pane) pane.style.filter = mapBrightness !== 100 ? `brightness(${mapBrightness}%)` : ''
-  }, [mapBrightness])
+    if (!pane) return
+    const parts = []
+    if (mapBrightness !== 100) parts.push(`brightness(${mapBrightness}%)`)
+    if (nightVision) parts.push('sepia(1) hue-rotate(310deg) saturate(5)')
+    pane.style.filter = parts.join(' ')
+  }, [mapBrightness, nightVision])
 
   // Clear all rulers helper (stable ref so it can be used inside JSX without dep issues)
   const clearRulers = () => {
@@ -1242,24 +1287,57 @@ export default function MapView({
 
     extraTxList.forEach(entry => {
       const id = String(entry.id)
-      const { tx: etx, color, label, geojson } = entry
+      const { tx: etx, color, label, geojson, origin } = entry
 
-      // Marker
+      // Marker — visual style switches on entry.origin so the operator can
+      // tell algorithm-tab fixes apart from DF-head fixes apart from manual TXs:
+      //   df_head    → circle, solid border (default)
+      //   algorithm  → diamond, dashed border + Σ glyph + dotted halo
+      //   (manual)   → circle without the labelled origin badge
       if (extraTxMarkersRef.current[id]) {
         extraTxMarkersRef.current[id].setLatLng([etx.lat, etx.lon])
       } else {
-        const icon = L.divIcon({
-          className: '',
-          html: `<div style="
+        let html
+        if (origin === 'algorithm' || origin === 'target') {
+          // Σ glyph for algorithm fixes; ⌖ glyph for per-identifier target fixes.
+          // Rotated square + dashed border so the algorithm-derived family of markers reads
+          // distinctly from DF-head fixes (solid circles) and manual TXs (labelled).
+          const glyph = (origin === 'target') ? '⌖' : 'Σ'
+          const title = (origin === 'target') ? 'Target fix (by identifier)' : 'Algorithm fix'
+          html = `<div title="${title}" style="
+            width:28px;height:28px;
+            display:flex;align-items:center;justify-content:center;
+            transform:rotate(45deg); border:2px dashed #fff;
+            background:${color};
+            box-shadow:0 2px 8px rgba(0,0,0,0.6),0 0 0 3px ${color}55;
+            cursor:grab;">
+              <span style="transform:rotate(-45deg); font-size:13px; font-weight:700; color:#000;">${glyph}</span>
+            </div>`
+        } else if (origin === 'df_head') {
+          // Circle + small badge so operators see which fixes come from a coherent array.
+          html = `<div title="DF-head fix" style="
+            width:26px;height:26px;border-radius:50%;
+            background:${color};
+            border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.6),0 0 0 3px ${color}55;
+            display:flex;align-items:center;justify-content:center;cursor:grab;
+            font-size:9px;font-weight:700;color:#000;">DF</div>`
+        } else {
+          html = `<div style="
             width:24px;height:24px;border-radius:50%;
             background:${color};
             border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.6),0 0 0 3px ${color}55;
             display:flex;align-items:center;justify-content:center;cursor:grab;font-size:9px;font-weight:700;color:#000;
-          ">${label.replace('TX ', '')}</div>`,
-          iconSize: [24, 24], iconAnchor: [12, 12],
+          ">${label.replace('TX ', '')}</div>`
+        }
+        const icon = L.divIcon({
+          className: '',
+          html,
+          iconSize: [28, 28], iconAnchor: [14, 14],
         })
         const marker = L.marker([etx.lat, etx.lon], {
-          icon, draggable: true, title: `${label} (drag to move · click to select, Delete to remove)`, zIndexOffset: 990,
+          icon, draggable: true,
+          title: `${label} · source: ${origin || 'manual'} (drag to move · click to select, Delete to remove)`,
+          zIndexOffset: 990,
         }).addTo(map)
 
         marker.on('dragend', (e) => {
@@ -1268,8 +1346,11 @@ export default function MapView({
         })
         marker.on('click', () => selectFeatureRef.current?.({ kind: 'extra_tx', id: entry.id }))
 
+        const originLine = origin === 'algorithm'
+          ? `<br><span style="color:#22d3ee">⊕ Algorithm fix${entry.algorithm_method_id ? ' · ' + entry.algorithm_method_id : ''}${entry.algorithm_cep_m ? ' · CEP ' + Math.round(entry.algorithm_cep_m) + ' m' : ''}</span>`
+          : origin === 'df_head' ? `<br><span style="color:#3fb950">⊞ DF-head fix${entry.trackingFixKey ? ' (live-tracked)' : ''}</span>` : ''
         marker.bindPopup(`<div style="font-size:12px;min-width:140px">
-          <strong style="color:${color}">${label}</strong><br>
+          <strong style="color:${color}">${label}</strong>${originLine}<br>
           Lat: ${etx.lat.toFixed(5)}<br>Lon: ${etx.lon.toFixed(5)}<br>
           Power: ${etx.power_dbm} dBm
         </div>`)
@@ -1730,6 +1811,27 @@ export default function MapView({
         )
         .addTo(grp)
       attachRulerClick(centroidMarker)
+      // Right-click on this fix/cut centroid opens the map context menu with
+      // an extra "Simulate Propagation" entry, so the operator can attach a
+      // propagation emitter that tracks this group's updating centroid.
+      centroidMarker.on('contextmenu', (e) => {
+        if (drawCtrlRef.current?.getActiveTool()) return
+        if (terrainLineModeRef.current) return
+        const map = leafletRef.current; if (!map) return
+        const pt = map.latLngToContainerPoint(centroidMarker.getLatLng())
+        setCtxMenu({
+          x: pt.x, y: pt.y, lat: centroid.lat, lon: centroid.lon,
+          target: { kind: 'fix-cut', groupSummary: {
+            frequency_hz: group.frequency_hz,
+            device_id: group.device_id || '',
+            device_type: group.device_type || '',
+            n_lobs: group.lobs.length,
+            kind: isFix ? 'fix' : 'cut',
+          } },
+        })
+        L.DomEvent.stopPropagation(e)
+        if (e.originalEvent) L.DomEvent.preventDefault(e.originalEvent)
+      })
     })
   }, [lobs, lobGroups, capGroups, mapColors, lobAlgorithm])
 
@@ -2021,6 +2123,24 @@ export default function MapView({
 
                 <div style={{ fontSize: 10, fontWeight: 700, color: '#8b949e',
                               padding: '8px 4px 6px', textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                  Briefing
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+                  {TOOL_KINDS.briefing.map(t => (
+                    <button key={t.id}
+                      className={`btn ${toolsActive === t.id ? 'btn-primary' : 'btn-ghost'}`}
+                      style={{ padding: '6px 4px', fontSize: 10, lineHeight: 1.2,
+                               display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}
+                      title={t.label}
+                      onClick={() => activateTool(t.id)}>
+                      <span style={{ fontSize: 14 }}>{t.icon}</span>
+                      <span>{t.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ fontSize: 10, fontWeight: 700, color: '#8b949e',
+                              padding: '8px 4px 6px', textTransform: 'uppercase', letterSpacing: 0.8 }}>
                   Markers
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
@@ -2054,21 +2174,27 @@ export default function MapView({
                 {natoOpen && (
                   <div style={{ background: '#0d1117', border: '1px solid #30363d',
                                 borderRadius: 6, padding: '4px 6px', marginBottom: 6 }}>
-                    <Suspense fallback={
-                      <div style={{ fontSize: 11, color: '#8b949e', padding: 14, textAlign: 'center' }}>
-                        Loading NATO symbology…
-                      </div>
-                    }>
-                      <NatoSymbolPicker
-                        ctrl={drawCtrlRef.current}
-                        onArm={(arm) => {
-                          drawCtrlRef.current?.setNatoSymbol?.(arm)
-                          if (drawCtrlRef.current?.getActiveTool() !== 'nato') {
-                            drawCtrlRef.current?.activate?.('nato')
-                          }
-                        }}
-                      />
-                    </Suspense>
+                    {/* ErrorBoundary surfaces any module-load or render error
+                        from the lazy NatoSymbolPicker — without it, a thrown
+                        error inside Suspense leaves the fallback visible
+                        forever ("stuck loading"). */}
+                    <ErrorBoundary label="NATO symbology picker" resetKey={natoOpen}>
+                      <Suspense fallback={
+                        <div style={{ fontSize: 11, color: '#8b949e', padding: 14, textAlign: 'center' }}>
+                          Loading NATO symbology…
+                        </div>
+                      }>
+                        <NatoSymbolPicker
+                          ctrl={drawCtrlRef.current}
+                          onArm={(arm) => {
+                            drawCtrlRef.current?.setNatoSymbol?.(arm)
+                            if (drawCtrlRef.current?.getActiveTool() !== 'nato') {
+                              drawCtrlRef.current?.activate?.('nato')
+                            }
+                          }}
+                        />
+                      </Suspense>
+                    </ErrorBoundary>
                   </div>
                 )}
 
@@ -2294,7 +2420,7 @@ export default function MapView({
             }}
           >
             <span style={{ flexShrink: 0, fontSize: 14, lineHeight: 1 }}>📏</span>
-            {pendingPoints === 1 ? 'Set ruler endpoint here' : 'Set ruler start here'}
+            Add Ruler
           </button>
           <button
             style={{
@@ -2361,6 +2487,59 @@ export default function MapView({
           >
             <span style={{ flexShrink: 0, fontSize: 14, lineHeight: 1 }}>🗺️</span>
             Download mapping data for this region…
+          </button>
+          {ctxMenu.target?.kind === 'fix-cut' && (
+            <>
+              <button
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  width: '100%', padding: '8px 14px',
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: '#00b4d8', fontSize: 13, textAlign: 'left',
+                  transition: 'background 120ms',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = '#21262d'}
+                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                onClick={() => {
+                  onSimulatePropagationFromFix?.(ctxMenu.target.groupSummary, ctxMenu.lat, ctxMenu.lon)
+                  setCtxMenu(null)
+                }}
+              >
+                <span style={{ flexShrink: 0, fontSize: 14, lineHeight: 1 }}>📡</span>
+                Simulate propagation from this {ctxMenu.target.groupSummary?.kind?.toUpperCase()}…
+              </button>
+              <div style={{ height: 1, background: '#21262d', margin: '4px 0' }} />
+            </>
+          )}
+          <button
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              width: '100%', padding: '8px 14px',
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: '#f59e0b', fontSize: 13, textAlign: 'left',
+              transition: 'background 120ms',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = '#21262d'}
+            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+            onClick={() => { onViewshedAt?.(ctxMenu.lat, ctxMenu.lon); setCtxMenu(null) }}
+          >
+            <span style={{ flexShrink: 0, fontSize: 14, lineHeight: 1 }}>👁</span>
+            Viewshed from here…
+          </button>
+          <button
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              width: '100%', padding: '8px 14px',
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: '#a78bfa', fontSize: 13, textAlign: 'left',
+              transition: 'background 120ms',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = '#21262d'}
+            onMouseLeave={e => e.currentTarget.style.background = 'none'}
+            onClick={() => { onContoursAt?.(ctxMenu.lat, ctxMenu.lon); setCtxMenu(null) }}
+          >
+            <span style={{ flexShrink: 0, fontSize: 14, lineHeight: 1 }}>⛰️</span>
+            Contour lines around here…
           </button>
           <div style={{ height: 1, background: '#21262d', margin: '4px 0' }} />
           <div style={{
@@ -2715,6 +2894,11 @@ function toolHintText(tool) {
     case 'milHostile':  return 'Click to drop hostile marker'
     case 'milNeutral':  return 'Click to drop neutral marker'
     case 'milUnknown':  return 'Click to drop unknown marker'
+    case 'pairing':     return 'Pairing line — click endpoint A then endpoint B; either is draggable for live range/bearing'
+    case 'phaseLine':   return 'Phase Line — click waypoints, right-click/Esc to finish (you’ll be prompted for a name)'
+    case 'flot':        return 'FLOT — click waypoints along the line; teeth point right of travel'
+    case 'axisAdvance': return 'Axis of Advance — click waypoints from rear to objective; tip becomes the arrowhead'
+    case 'boundary':    return 'Boundary — click waypoints; perpendicular tics mark each vertex'
     default:            return `Drawing: ${tool}`
   }
 }

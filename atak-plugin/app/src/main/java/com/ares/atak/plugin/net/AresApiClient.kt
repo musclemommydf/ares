@@ -103,6 +103,16 @@ class AresApiClient(baseUrl: String, allowSelfSigned: Boolean = false) {
     // ── geolocation ─────────────────────────────────────────────────────────
     suspend fun geolocateFix(req: GeoFixRequest): GeoFixResponse = withContext(Dispatchers.IO) { post("/api/v1/geolocate/fix", req) }
 
+    /** Terrain-aware range cap for a single LoB. Builds the request from a LoB DTO
+     *  so callers don't have to repackage; returns the parsed range/confidence response. */
+    suspend fun lobRangeEstimate(lob: GeoLineOfBearing): LoBRangeEstimateResponse = withContext(Dispatchers.IO) {
+        post("/api/v1/lob/range_estimate", LoBRangeEstimateRequest(
+            observerLat = lob.lat, observerLon = lob.lon,
+            azimuthDeg = lob.azimuthDeg, frequencyHz = lob.frequencyHz,
+            txPowerDbm = lob.txPowerDbm, observedRssiDbm = lob.rssiDbm,
+        ))
+    }
+
     // ── KMZ export (returns the raw .kmz bytes) ─────────────────────────────
     suspend fun exportKmz(geojson: JsonObject, name: String, minSignalDbm: Double = -120.0): ByteArray = withContext(Dispatchers.IO) {
         val payload = kotlinx.serialization.json.buildJsonObject {

@@ -1,32 +1,34 @@
-// ARES-ATAK plugin — :app module (skeleton).
+// ARES-ATAK plugin — :app module. Builds an ATAK plugin APK against the
+// ATAK-CIV SDK (main.jar) referenced by `takdev.plugin` in local.properties.
 //
-// TODO before this builds:
-//   - apply the ATAK gradle plugin (`com.atakmap.android.plugin`) from the
-//     tak.gov SDK instead of plain `com.android.application`, OR keep
-//     `com.android.application` and add `main.jar` as a `compileOnly` file
-//     dependency + the `ATAKMapEngine.jar` per the SDK README.
-//   - set compileSdk / targetSdk to the values the ATAK SDK you target requires.
-//   - configure signing (debug keystore for sideload; TAK PC signing for release).
+// Build: `./gradlew assembleCivDebug` → app/build/outputs/apk/civ/debug/*.apk
+//        sideload with `adb install -r <apk>` while ATAK is running, then
+//        accept the "Load plugin?" prompt.
 
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
-    // id 'com.atakmap.android.plugin'      // <- from the tak.gov SDK
+    id 'org.jetbrains.kotlin.plugin.serialization' version '1.9.24'
+    id 'atak-takdev-plugin'                       // from tak.gov SDK (atak-gradle-takdev.jar)
 }
+
+// takdev's offline mode: look in `takdevDir` (set from local.properties' takdev.plugin)
+// for main.jar — this is what wires up the ATAK API as compileOnly.
+android.compileSdk = 34
+android.buildToolsVersion = '34.0.0'
 
 android {
     namespace 'com.ares.atak.plugin'
-    compileSdk 34                            // TODO: match ATAK SDK
 
     defaultConfig {
         applicationId 'com.ares.atak.plugin'
-        minSdk 26                            // TODO: match ATAK SDK
-        targetSdk 34                         // TODO: match ATAK SDK
+        minSdk 26                                  // ATAK 5.x runs API 21+, but Kotlin 1.9 + coroutines play nicer on 26+
+        targetSdk 34
         versionCode Integer.parseInt(project.properties.getOrDefault('atak.plugin.versionCode', '1').toString())
         versionName project.properties.getOrDefault('atak.plugin.versionName', '0.1.0-dev').toString()
     }
 
-    // ATAK plugins are built per ATAK "flavor" (civ / mil). Sideload uses `civ`.
+    // ATAK plugins are flavored per ATAK distribution (civ for sideload; mil for Product Center).
     flavorDimensions 'application'
     productFlavors {
         civ { dimension 'application' }
@@ -34,7 +36,6 @@ android {
 
     buildFeatures {
         viewBinding true
-        // compose true                      // SDK 5.5+ supports Jetpack Compose UI; enable on `main`
     }
 
     compileOptions {
@@ -44,27 +45,27 @@ android {
     kotlinOptions { jvmTarget = '17' }
 
     buildTypes {
-        debug { /* uses the Android debug keystore by default */ }
+        debug { /* sideload uses the Android debug keystore */ }
         release {
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // signingConfig ...   // TAK Product Center signing for tak.gov / Play release
+            // Release builds for tak.gov / Play submit unsigned APK to the TAK Product Center for signing.
         }
+    }
+
+    packaging {
+        resources.excludes += ['META-INF/AL2.0', 'META-INF/LGPL2.1', 'META-INF/*.kotlin_module']
     }
 }
 
 dependencies {
-    // --- ATAK SDK (from tak.gov) — provided at runtime by ATAK itself ---
-    // compileOnly files("$rootDir/sdk/main.jar")          // TODO: path to the SDK jar
-    // compileOnly files("$rootDir/sdk/ATAKMapEngine.jar")
+    // ATAK SDK (main.jar) is added as compileOnly by the takdev plugin — do not list it here.
 
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'
 
     // Networking: Ares REST API + WebSocket progress
-    implementation 'com.squareup.retrofit2:retrofit:2.11.0'
-    implementation 'com.squareup.retrofit2:converter-kotlinx-serialization:2.11.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.squareup.okhttp3:logging-interceptor:4.12.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3'

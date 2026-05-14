@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ARES toolbar icon — a 32x32 vector. Concentric rings + a centred wedge to
+  evoke "coverage / DF / radio propagation". Tinted white so ATAK's toolbar
+  theming applies its usual flat-icon palette.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32"
+    android:tint="#FFFFFFFF">
+
+    <!-- outer coverage ring -->
+    <path android:strokeColor="#FFFFFFFF"
+          android:strokeWidth="1.6"
+          android:fillColor="#00000000"
+          android:pathData="M 16 4 A 12 12 0 1 1 15.999 4 Z" />
+
+    <!-- mid ring -->
+    <path android:strokeColor="#FFFFFFFF"
+          android:strokeWidth="1.2"
+          android:fillColor="#00000000"
+          android:pathData="M 16 8 A 8 8 0 1 1 15.999 8 Z" />
+
+    <!-- bearing wedge (the "DF" hint) -->
+    <path android:fillColor="#FFFFFFFF"
+          android:fillAlpha="0.35"
+          android:pathData="M 16 16 L 28 8 A 14 14 0 0 1 28 24 Z" />
+
+    <!-- centre dot (transmitter) -->
+    <path android:fillColor="#FFFFFFFF"
+          android:pathData="M 14 14 h 4 v 4 h -4 z" />
+</vector>

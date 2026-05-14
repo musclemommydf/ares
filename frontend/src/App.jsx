@@ -69,6 +69,7 @@ import BestServerSidebar from './components/Controls/BestServerSidebar'
 import BsaPolygonSidebar from './components/Controls/BsaPolygonSidebar'
 import RayTraceSidebar from './components/Controls/RayTraceSidebar'
 import ToolBtn from './components/Common/ToolBtn'
+import PromptDialogProvider from './components/Common/PromptDialog'
 
 import {
   simulateCoverage, simulateCoverageRaster, simulateP2P, simulateBestSite, getSpaceWeather, purgeCache,
@@ -76,6 +77,7 @@ import {
   simulateInterference, simulateSuperLayer, simulateBestSitePolygon,
   simulateRayTrace, simulateSatelliteVisibility,
   getBuildings, regionAtPoint,
+  getViewshed, getTerrainContours,
 } from './api/client'
 import ThreeDView from './components/Charts/ThreeDView'
 
@@ -568,7 +570,10 @@ export default function App() {
       if (!sel) return
       e.preventDefault()
       const kind = ul.removeSelected?.()
-      if (kind) toast.info(kind === 'drawn' ? 'Removed the drawn feature' : 'Removed the map layer')
+      if (kind) toast.info(
+        kind === 'drawn'   ? 'Removed the drawn feature'
+        : kind === 'feature' ? 'Removed the feature'
+        : 'Removed the map layer')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -739,6 +744,86 @@ export default function App() {
     }
     input.click()
   }, [ul])
+
+  // ── Simulate Propagation from a fix/cut ───────────────────────────────────
+  // Operator right-clicks a fix/cut centroid (or hits the button in the
+  // Emitter Summary table) → we attach a "tracking" extra TX whose location
+  // mirrors the centroid as new LoBs refine it. Identified by a stable key
+  // derived from frequency + device_id so re-invoking with the same group
+  // doesn't spawn duplicates.
+  const fixKey = useCallback((g) => `fix:${Math.round((g?.frequency_hz || 0))}:${g?.device_id || ''}`, [])
+
+  const handleSimulatePropagationFromFix = useCallback((groupSummary, lat, lon) => {
+    if (!groupSummary || lat == null || lon == null) return
+    const key = fixKey(groupSummary)
+    setExtraTxList((prev) => {
+      // Already tracking this group → reuse, just nudge its lat/lon (lobGroups
+      // effect below would handle this on the next tick anyway).
+      const existing = prev.find((x) => x.trackingFixKey === key)
+      if (existing) {
+        return prev.map((x) => x.id === existing.id
+          ? { ...x, tx: { ...x.tx, lat, lon } }
+          : x)
+      }
+      const idx = prev.length
+      const color = TX_COLORS[idx % TX_COLORS.length]
+      const id = Date.now() + idx
+      return [...prev, {
+        id, color,
+        label: `${groupSummary.kind?.toUpperCase() || 'FIX'} · ${(groupSummary.frequency_hz / 1e6).toFixed(3)} MHz`,
+        trackingFixKey: key,
+        origin: 'df_head',                       // distinguishes from algorithm-tab fixes on the map
+        tx: { ...tx, lat, lon, frequency_hz: groupSummary.frequency_hz || tx.frequency_hz },
+        propagation: { ...propagation },
+        atmosphere: { ...atmosphere },
+      }]
+    })
+    setMainMode('propagation')
+    toast.success(`Tracking propagation from ${groupSummary.kind?.toUpperCase() || 'FIX'} @ ${(groupSummary.frequency_hz / 1e6).toFixed(3)} MHz`)
+  }, [tx, propagation, atmosphere, fixKey])
+
+  // Algorithms tab → "Send fix to map". Drops a distinct algorithm-origin
+  // emitter so the map can visually differentiate it from DF-head fixes.
+  const handleSendAlgorithmFixToMap = useCallback((fix) => {
+    if (!fix || fix.lat == null || fix.lon == null) return
+    setExtraTxList((prev) => {
+      const idx = prev.length
+      const color = TX_COLORS[idx % TX_COLORS.length]
+      const id = Date.now() + idx
+      return [...prev, {
+        id, color,
+        label: fix.label || `Algo: ${fix.method_name || fix.method_id || 'fix'}`,
+        origin: 'algorithm',                     // distinguishes from DF-head fixes on the map
+        algorithm_method_id: fix.method_id,
+        algorithm_cep_m: fix.cep_m,
+        tx: { ...tx, lat: fix.lat, lon: fix.lon },
+        propagation: { ...propagation },
+        atmosphere: { ...atmosphere },
+      }]
+    })
+    toast.success(`Algorithm fix → map: ${fix.method_name || fix.method_id}${fix.cep_m ? ` (CEP ${Math.round(fix.cep_m)} m)` : ''}`)
+  }, [tx, propagation, atmosphere])
+
+  // Keep every tracking extra-TX glued to its current centroid as lobGroups
+  // updates. Cheap diff — only touches TXs whose position actually changed.
+  useEffect(() => {
+    if (!extraTxList.some((x) => x.trackingFixKey)) return
+    setExtraTxList((prev) => {
+      let changed = false
+      const next = prev.map((x) => {
+        if (!x.trackingFixKey) return x
+        const grp = lobGroups.find((g) => fixKey(g) === x.trackingFixKey)
+        if (!grp) return x
+        const ints = computeGroupIntersections(grp)
+        const c = computeCentroid(ints)
+        if (!c) return x
+        if (Math.abs((x.tx.lat ?? 0) - c.lat) < 1e-7 && Math.abs((x.tx.lon ?? 0) - c.lon) < 1e-7) return x
+        changed = true
+        return { ...x, tx: { ...x.tx, lat: c.lat, lon: c.lon } }
+      })
+      return changed ? next : prev
+    })
+  }, [lobGroups, extraTxList.length, fixKey])
 
   // ── Multi-TX management ───────────────────────────────────────────────────
   const addTransmitter = useCallback(() => {
@@ -1715,12 +1800,58 @@ export default function App() {
           onAddEmitter={handleAddEmitter}
           onAddLoBObserver={handleAddLoBObserver}
           onAddLoBAzimuthTarget={handleAddLoBAzimuthTarget}
+          onSimulatePropagationFromFix={handleSimulatePropagationFromFix}
           onDownloadRegionAt={async (lat, lon) => {
             try {
               const r = await regionAtPoint(lat, lon)
               setLayersRegionPreselect(r); setLayersOpen(true)
             } catch {
               toast.info('No catalogued region contains that point — open the Layer Manager and search by name instead')
+            }
+          }}
+          onViewshedAt={async (lat, lon) => {
+            // Defaults — Electron's BrowserWindow blocks window.prompt(), so we
+            // don't ask up-front. Operator can delete the layer and re-run, or
+            // tweak via the dedicated Viewshed panel (next pass).
+            const radius = 10, height = 2
+            console.info('[viewshed] requesting', { lat, lon, radius, height })
+            const id = toast.info(`Computing viewshed at ${lat.toFixed(4)},${lon.toFixed(4)} (${radius} km)…`, { autoClose: false })
+            try {
+              const fc = await getViewshed({ lat, lon, radius_km: radius, observer_height_m: height })
+              console.info('[viewshed] result', fc)
+              if (!fc?.features?.length) {
+                toast.dismiss(id); toast.warning('Viewshed returned no visible region — no terrain data for this point?')
+                return
+              }
+              ul?.addGeoJSONLayer?.(fc, { name: `Viewshed @ ${lat.toFixed(4)},${lon.toFixed(4)} (${radius} km)`,
+                                          sourceFormat: 'viewshed', color: '#f59e0b', opacity: 0.45 })
+              toast.dismiss(id); toast.success('Viewshed added — visible from observer in orange')
+            } catch (e) {
+              console.error('[viewshed] failed', e)
+              toast.dismiss(id)
+              const msg = e?.response?.data?.detail || e?.message || String(e)
+              toast.error(`Viewshed failed: ${msg}`, { autoClose: 8000 })
+            }
+          }}
+          onContoursAt={async (lat, lon) => {
+            const radius = 10, interval = 50
+            console.info('[contours] requesting', { lat, lon, radius, interval })
+            const id = toast.info(`Generating ${interval} m contours at ${lat.toFixed(4)},${lon.toFixed(4)} (${radius} km)…`, { autoClose: false })
+            try {
+              const fc = await getTerrainContours(lat, lon, radius, interval)
+              console.info('[contours] result', fc)
+              if (!fc?.features?.length) {
+                toast.dismiss(id); toast.warning(fc?.note || 'No contour data — area effectively flat or terrain pack missing')
+                return
+              }
+              ul?.addGeoJSONLayer?.(fc, { name: `Contours @ ${lat.toFixed(4)},${lon.toFixed(4)} (${interval} m)`,
+                                          sourceFormat: 'contours', color: '#a78bfa', opacity: 0.85 })
+              toast.dismiss(id); toast.success(`Added ${fc.features.length} contour line${fc.features.length > 1 ? 's' : ''}`)
+            } catch (e) {
+              console.error('[contours] failed', e)
+              toast.dismiss(id)
+              const msg = e?.response?.data?.detail || e?.message || String(e)
+              toast.error(`Contours failed: ${msg}`, { autoClose: 8000 })
             }
           }}
           showCompassRose={showCompassRose} setShowCompassRose={setShowCompassRose}
@@ -1776,6 +1907,8 @@ export default function App() {
           terrainGrid={terrainGrid} terrainGridLoading={terrainGridLoading} coverageGeoJSON={coverageGeoJSON} buildingGeoJSON={buildingGeoJSON}
           txActive={txActive} txLabel={txLabel} extraTxList={extraTxList} lobs={lobs} lobGroups={lobGroups}
           onRemoveLoB={handleRemoveLoB} onEditLoB={(lob) => { setMainMode('geolocation'); setEditLobRequestId(lob.id) }}
+          onSimulatePropagationFromFix={handleSimulatePropagationFromFix}
+          onSendAlgorithmFixToMap={handleSendAlgorithmFixToMap}
           savedLocations={savedLocations} onSavedFlyTo={(lat, lon) => setFlyToTarget({ lat, lon, zoom: 12, _t: Date.now() })} onSavedRemove={handleRemoveSavedLocation}
           tx={tx} rx={rx} propagation={propagation} spaceWeather={spaceWeather}
         />
@@ -1786,6 +1919,9 @@ export default function App() {
         theme="dark"
         toastStyle={{ background: '#161b22', borderColor: '#30363d', color: '#e6edf3' }}
       />
+      {/* Electron-safe replacement for window.prompt — see PromptDialog.jsx.
+          One provider, called via the `promptUser()` helper from anywhere. */}
+      <PromptDialogProvider />
     </div>
   )
 }

@@ -1,8 +1,9 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   groupLoBsByFrequency, lobGroupKey, computeGroupIntersections, computeCentroid,
   computeCAPEllipse, computeLoBRenderDistance, destinationPoint, DEFAULT_LOB_ALGORITHM,
 } from '../components/Geolocation/LoBUtils'
+import { useDfAlerts } from '../store/dfAlerts'
 
 /**
  * Direction-finding / line-of-bearing state for the "geolocation" mode:
@@ -77,7 +78,47 @@ export function useGeolocation(_s, onActivate) {
     return features
   }, [lobs, lobGroups, capGroups, lobAlgorithm])
 
-  const handleAddLoB = useCallback((lob) => { setLobs(prev => [...prev, lob]) }, [])
+  const fireAlert = useDfAlerts((s) => s.fire)
+  const handleAddLoB = useCallback((lob) => {
+    setLobs(prev => [...prev, lob])
+    try {
+      const fHz = Number(lob.frequency_hz)
+      const fMHz = Number.isFinite(fHz) && fHz > 0 ? `${(fHz / 1e6).toFixed(3)} MHz` : '—'
+      // Pass context so the alert filters (geofence inside/outside, watchlist, min SNR) can apply.
+      fireAlert('newLoB', `${fMHz} · ${Number(lob.azimuth_deg ?? 0).toFixed(1)}°`, {
+        lat: lob.lat, lon: lob.lon,
+        frequency_hz: fHz,
+        snr_db: lob.snr_db,
+      })
+    } catch { /* ignore alert errors */ }
+  }, [fireAlert])
+
+  // Group-transition alerts: 1→2 LoBs in a freq group ⇒ first cut, 2→3 ⇒ first
+  // high-confidence fix. Tracked by group key so re-adds of the same group
+  // don't re-fire. Also fires `newEmitter` when a centroid first becomes
+  // computable for a group (effectively coincident with newFix but treated as
+  // a separate event so operators can mute the cut/fix beeps and only hear
+  // confirmed emitter pings).
+  const groupStateRef = useRef(new Map())   // key → { count, hadEmitter }
+  useEffect(() => {
+    const prev = groupStateRef.current
+    const next = new Map()
+    for (const g of lobGroups) {
+      const key = lobGroupKey(g)
+      const count = g.lobs.length
+      const had = prev.get(key) || { count: 0, hadEmitter: false }
+      next.set(key, { count, hadEmitter: had.hadEmitter || count >= 2 })
+      const fMHz = `${(g.frequency_hz / 1e6).toFixed(3)} MHz`
+      if (had.count < 2 && count >= 2) fireAlert('newCut', `${fMHz} · ${count} bearings`)
+      if (had.count < 3 && count >= 3) {
+        fireAlert('newFix', `${fMHz} · ${count} bearings`)
+        if (!had.hadEmitter) fireAlert('newEmitter', `${fMHz}`)
+      }
+    }
+    groupStateRef.current = next
+  }, [lobGroups, fireAlert])
+
+
   const handleRemoveLoB = useCallback((id) => { setLobs(prev => prev.filter(l => l.id !== id)) }, [])
   const handleUpdateLoB = useCallback((updated) => { setLobs(prev => prev.map(l => l.id === updated.id ? updated : l)) }, [])
   const handleToggleCAP = useCallback((groupKey) => {

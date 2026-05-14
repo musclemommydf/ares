@@ -16,7 +16,7 @@ function rmsM(inters, centroid) {
  * any extras), the lines-of-bearing list, and the geolocated emitters (Cuts/Fixes
  * from groups of ≥2 LoBs, with the estimated location and RMS).
  */
-export default function EmitterSummary({ txActive, txLabel, tx, extraTxList, lobs, lobGroups, onRemoveLoB, onEditLoB }) {
+export default function EmitterSummary({ txActive, txLabel, tx, extraTxList, lobs, lobGroups, onRemoveLoB, onEditLoB, onSimulatePropagationFromFix }) {
   const propEmitters = [
     txActive ? { id: 'primary', label: txLabel, lat: tx.lat, lon: tx.lon, freq: tx.frequency_hz, type: 'propagation' } : null,
     ...extraTxList.map(e => ({ id: e.id, label: e.label, lat: e.tx?.lat ?? e.lat, lon: e.tx?.lon ?? e.lon, freq: e.tx?.frequency_hz ?? e.frequency_hz, type: 'propagation' })),
@@ -76,6 +76,24 @@ export default function EmitterSummary({ txActive, txLabel, tx, extraTxList, lob
                 : <div style={{ fontSize: 10, color: '#ef4444', marginTop: 2 }}>No intersection (parallel bearings?)</div>}
               {rms != null && <div style={{ fontSize: 10, color: '#484f58' }}>Location accuracy: {fmtM(rms)} RMS</div>}
               <div style={{ fontSize: 10, color: '#484f58' }}>Mean confidence: {avgConf}%</div>
+              {onSimulatePropagationFromFix && centroid && (
+                <button
+                  type="button"
+                  onClick={() => onSimulatePropagationFromFix({
+                    frequency_hz: grp.frequency_hz,
+                    device_id: grp.device_id || '',
+                    device_type: grp.device_type || '',
+                    n_lobs: grp.lobs.length,
+                    kind: isFix ? 'fix' : 'cut',
+                  }, centroid.lat, centroid.lon)}
+                  style={{
+                    marginTop: 6, width: '100%', padding: '4px 6px', fontSize: 11,
+                    background: '#0d2438', color: '#7dd3fc', border: '1px solid #1e3a5f',
+                    borderRadius: 4, cursor: 'pointer',
+                  }}>
+                  📡 Simulate propagation
+                </button>
+              )}
             </div>
           )
         })}

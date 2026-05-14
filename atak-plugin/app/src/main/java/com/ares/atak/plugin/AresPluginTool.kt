@@ -1,23 +1,20 @@
 package com.ares.atak.plugin
 
 import android.content.Context
-import android.content.Intent
+import com.atak.plugins.impl.AbstractPluginTool
 
 /**
- * ARES-ATAK — toolbar tool (skeleton).
+ * ARES-ATAK — toolbar entry. Renders an icon in ATAK's toolbar; tapping it
+ * broadcasts [AresMapComponent.SHOW_ARES], which [AresDropDownReceiver]
+ * listens for and uses to inflate the ARES dropdown pane.
  *
- * Declared in `assets/plugin.xml`. Appears in ATAK's toolbar; tapping it
- * broadcasts [AresMapComponent.SHOW_ARES] to open the dropdown pane.
- *
- * Real implementation: `class AresPluginTool(context: Context) :
- * transapps.maps.plugin.tool.Tool` (or `AbstractTool`) — provide `getDescription()`,
- * an icon `Drawable`, and `onActivate(...)` that fires the intent.
+ * The constructor parameters land on [AbstractPluginTool] and drive the
+ * tool-grid presentation (label, long-press tooltip, intent action).
  */
-class AresPluginTool /* (private val context: Context) : transapps.maps.plugin.tool.Tool */ {
-
-    /* override */ fun getDescription(): String = "ARES — RF propagation & DF"
-
-    /* override */ fun onActivate(context: Context /*, mapView, parent, extras, callback */) {
-        context.sendBroadcast(Intent(AresMapComponent.SHOW_ARES))
-    }
-}
+class AresPluginTool(pluginContext: Context) : AbstractPluginTool(
+    pluginContext,
+    pluginContext.getString(R.string.app_name),                  // short label
+    pluginContext.getString(R.string.app_desc),                  // long description
+    AresMapComponent.SHOW_ARES,                                  // intent fired on tap
+    pluginContext.resources.getDrawable(R.drawable.ic_ares, pluginContext.theme),
+)

@@ -55,6 +55,87 @@ export async function getTerrainGrid(lat, lon, radius_km = 5, grid_size = 30, re
   return data
 }
 
+// ── Bundled DSP + tracker + decoder ──────────────────────────────────────────
+export async function dfChannelize(payload) { return (await api.post('/df/channelize', payload)).data }
+export async function dfModclass(payload) { return (await api.post('/df/modclass', payload)).data }
+export async function dfMultibaseline(payload) { return (await api.post('/df/multibaseline', payload)).data }
+export async function dfMovingPlatform(payload) { return (await api.post('/df/moving_platform', payload)).data }
+export async function dfWatchlists() { return (await api.get('/df/watchlists')).data }
+export async function dfGmphdStep(observations) { return (await api.post('/df/gmphd/step', { observations })).data }
+export async function dfGmphdState() { return (await api.get('/df/gmphd/state')).data }
+export async function dfGmphdReset() { return (await api.post('/df/gmphd/reset')).data }
+export async function dfSpoofCheck(payload) { return (await api.post('/df/spoof_check', payload)).data }
+export async function dfModeSDecode(messages_hex) { return (await api.post('/df/decoders/mode_s', { messages_hex })).data }
+export async function dfReplayList() { return (await api.get('/df/replay/list')).data }
+export async function dfTimeSync() { return (await api.get('/df/time_sync')).data }
+export async function dfHealth() { return (await api.get('/df/health')).data }
+export async function dfTrackArchive(id) { return (await api.get(`/df/track_archive/${encodeURIComponent(id)}`)).data }
+export async function dfTrackArchiveList() { return (await api.get('/df/track_archive')).data }
+export async function dfRecordings() { return (await api.get('/df/recordings')).data }
+export async function dfGnuradioStatus() { return (await api.get('/df/gnuradio/status')).data }
+// Re-export the axios instance so components that use it directly (Heatmap, EmitterDetailCard) keep working.
+export default api
+
+// ── DF / DoA bundled pipeline ────────────────────────────────────────────────
+export async function getDfDrivers() {
+  const { data } = await api.get('/df/drivers'); return data
+}
+export async function dfPseudoSpectrum(payload) {
+  const { data } = await api.post('/df/pseudo_spectrum', payload); return data
+}
+export async function dfSourceCount(payload) {
+  const { data } = await api.post('/df/source_count', payload); return data
+}
+export async function dfTrackerStep(observations) {
+  const { data } = await api.post('/df/tracker/step', { observations }); return data
+}
+export async function dfTrackerState() {
+  const { data } = await api.get('/df/tracker/state'); return data
+}
+export async function dfTrackerReset() {
+  const { data } = await api.post('/df/tracker/reset'); return data
+}
+export async function dfFuse(payload) {
+  const { data } = await api.post('/df/fuse', payload); return data
+}
+export async function dfTaskingList() { return (await api.get('/df/tasking')).data }
+export async function dfTaskingAdd(entry) { return (await api.post('/df/tasking', entry)).data }
+export async function dfTaskingUpdate(id, entry) { return (await api.put(`/df/tasking/${id}`, entry)).data }
+export async function dfTaskingDelete(id) { return (await api.delete(`/df/tasking/${id}`)).data }
+export async function dfAntennas() { return (await api.get('/df/antennas')).data }
+export async function dfCalibrationSave(payload) { return (await api.post('/df/calibration/save', payload)).data }
+export async function dfCalibrationLoad(deviceId) { return (await api.get(`/df/calibration/${deviceId}`)).data }
+export async function passiveRadarProcess(payload) {
+  const { data } = await api.post('/df/passive_radar/process', payload); return data
+}
+export async function passiveRadarIlluminators(region) {
+  const { data } = await api.get('/df/passive_radar/illuminators', { params: region ? { region } : {} })
+  return data
+}
+export async function missionExport(payload) {
+  // Returns raw bytes
+  const resp = await api.post('/df/mission/export', payload, { responseType: 'arraybuffer' })
+  return resp.data
+}
+
+// GeoJSON FeatureCollection of LineStrings at every `interval_m` of elevation
+// within ±radius_km of (lat, lon). Backend uses matplotlib's contour generator
+// over a sampled elevation grid; intervals/levels echoed in `metadata`.
+export async function getTerrainContours(lat, lon, radius_km = 10, interval_m = 50, grid_size = 80, resolution) {
+  const { data } = await api.get('/terrain/contours', {
+    params: { lat, lon, radius_km, interval_m, grid_size, ...(resolution ? { resolution } : {}) },
+  })
+  return data
+}
+
+// Pure-geometry line-of-sight viewshed (no RF). Returns a FeatureCollection with
+// one Polygon feature outlining the visible region. The earth_curvature flag
+// uses k=4/3 effective-radius refraction for the LoS ray.
+export async function getViewshed(params) {
+  const { data } = await api.post('/viewshed', params)
+  return data
+}
+
 export async function getSpaceWeather() {
   const { data } = await api.get('/space_weather')
   return data
@@ -362,6 +443,7 @@ export async function solveAoaLive(body)            { const { data } = await api
 export async function getSdrSpectrum(id, params={}) { const { data } = await api.get(`/sdr/devices/${encodeURIComponent(id)}/spectrum`, { params }); return data }
 export async function getDfAccuracyEstimate(params={}) { const { data } = await api.get('/sdr/accuracy_estimate', { params }); return data }
 export async function getAudioModes()               { const { data } = await api.get('/sdr/audio/modes'); return data }
+export async function identifyPtt(body)              { const { data } = await api.post('/sdr/audio/identify_ptt', body); return data }
 export async function startSdrAudio(id, frequency_hz, mode) { const { data } = await api.post(`/sdr/devices/${encodeURIComponent(id)}/audio`, { frequency_hz, mode }); return data }
 export async function getCompassModes()             { const { data } = await api.get('/sdr/compass/modes'); return data }
 export async function calibrateCompass(id, body)   { const { data } = await api.post(`/sdr/devices/${encodeURIComponent(id)}/calibrate`, body); return data }
@@ -426,6 +508,39 @@ export async function getUasStatus() { const { data } = await api.get('/uas/stat
 export async function getUasDecoders() { const { data } = await api.get('/uas/decoders'); return data }
 export async function scanUas(params) { const { data } = await api.get('/uas/scan', { params }); return data }
 export async function startUasDecode(body) { const { data } = await api.post('/uas/decode', body); return data }
+export async function redemodUasSession(sid, body) { const { data } = await api.post(`/uas/sessions/${sid}/redemod`, body); return data }
+export async function resetUasMaxHold(maxhold_key='default') { const { data } = await api.post('/uas/scan/maxhold/reset', null, { params: { maxhold_key } }); return data }
+export async function getUasMaxHold(maxhold_key='default') { const { data } = await api.get('/uas/scan/maxhold', { params: { maxhold_key } }); return data }
+
+// ── Algorithms tab (single-channel DF & multi-method fusion, all in-process) ─
+export async function algorithmsList()          { const { data } = await api.get('/algorithms/methods'); return data }
+export async function algorithmsFeasibility(b)  { const { data } = await api.post('/algorithms/feasibility', b); return data }
+export async function algoRssPathLoss(b)        { const { data } = await api.post('/algorithms/rss_path_loss', b); return data }
+export async function algoRssGradient(b)        { const { data } = await api.post('/algorithms/rss_gradient', b); return data }
+export async function algoDopplerCpa(b)         { const { data } = await api.post('/algorithms/doppler_cpa', b); return data }
+export async function algoFdoaTrack(b)          { const { data } = await api.post('/algorithms/fdoa_track', b); return data }
+export async function algoSyntheticAperture(b)  { const { data } = await api.post('/algorithms/synthetic_aperture', b); return data }
+export async function algoPhaseInterferometry(b){ const { data } = await api.post('/algorithms/phase_interferometry', b); return data }
+export async function algoTdoaMultiReceiver(b)  { const { data } = await api.post('/algorithms/tdoa_multi_receiver', b); return data }
+export async function algoMlGridFusion(b)       { const { data } = await api.post('/algorithms/ml_grid_fusion', b); return data }
+export async function algoEkfTrack(b)           { const { data } = await api.post('/algorithms/ekf_track', b); return data }
+
+// ── Targets tab (per-identifier tracker) ─────────────────────────────────────
+export async function listTargets(params)        { const { data } = await api.get('/targets', { params }); return data }
+export async function getTarget(kind, value, opts={})    { const { data } = await api.get(`/targets/${encodeURIComponent(kind)}/${encodeURIComponent(value)}`, { params: opts }); return data }
+export async function getTargetRange(kind, value)        { const { data } = await api.get(`/targets/${encodeURIComponent(kind)}/${encodeURIComponent(value)}/range`); return data }
+export async function recomputeTargetFix(kind, value)    { const { data } = await api.post(`/targets/${encodeURIComponent(kind)}/${encodeURIComponent(value)}/fix`); return data }
+export async function forgetTarget(kind, value)          { const { data } = await api.delete(`/targets/${encodeURIComponent(kind)}/${encodeURIComponent(value)}`); return data }
+export async function pushTargetObservation(kind, value, body) { const { data } = await api.post(`/targets/${encodeURIComponent(kind)}/${encodeURIComponent(value)}/observe`, body); return data }
+export async function getTargetKinds()           { const { data } = await api.get('/targets/kinds'); return data }
+
+// ── Cellular / WiFi / BLE passive monitors ───────────────────────────────────
+export async function cellularCapabilities()     { const { data } = await api.get('/cellular/capabilities'); return data }
+export async function startCellular(body)        { const { data } = await api.post('/cellular/start', body); return data }
+export async function listCellularSessions()     { const { data } = await api.get('/cellular/sessions'); return data }
+export async function getCellularSession(sid)    { const { data } = await api.get(`/cellular/sessions/${sid}`); return data }
+export async function getCellularEvents(sid, since=0, limit=200) { const { data } = await api.get(`/cellular/sessions/${sid}/events`, { params: { since, limit } }); return data }
+export async function stopCellularSession(sid)   { const { data } = await api.delete(`/cellular/sessions/${sid}`); return data }
 export async function getUasSessions() { const { data } = await api.get('/uas/sessions'); return data }
 export async function getUasSessionMetadata(sid) { const { data } = await api.get(`/uas/sessions/${sid}/metadata`); return data }
 export async function deleteUasSession(sid) { const { data } = await api.delete(`/uas/sessions/${sid}`); return data }

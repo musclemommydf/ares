@@ -17,7 +17,11 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import SpectrumViewer from './SpectrumViewer'
-import { getSdrSpectrum, getDfAccuracyEstimate, getAudioModes, startSdrAudio, updateSdrDevice, getSdrState, getCompassModes, calibrateCompass } from '../../api/client'
+import { getSdrSpectrum, getDfAccuracyEstimate, getAudioModes, startSdrAudio, updateSdrDevice, getSdrState, getCompassModes, calibrateCompass, solveAoaLive, algoMlGridFusion, algoEkfTrack, identifyPtt } from '../../api/client'
+import { useDfAlerts } from '../../store/dfAlerts'
+import DfAlertsSettings from '../Geolocation/DfAlertsSettings'
+import BearingTimeScope from './BearingTimeScope'
+import { dfTrackerStep, dfTrackerState, dfTrackerReset } from '../../api/client'
 
 const _WATERFALL_MAX = 140   // rows of waterfall history kept per channel
 
@@ -25,7 +29,7 @@ const inp = { background: '#0d1117', border: '1px solid #30363d', borderRadius: 
 const lab = { fontSize: 10, color: '#8b949e', display: 'block', marginBottom: 2 }
 const btn = { background: '#21262d', border: '1px solid #30363d', borderRadius: 4, color: '#c9d1d9', padding: '3px 8px', cursor: 'pointer', fontSize: 11 }
 
-export default function DfPanel() {
+export default function DfPanel({ onSendAlgorithmFixToMap = null } = {}) {
   // self-contained: polls /sdr/state for devices / LoBs / GPS (independent of the SDR-console WS)
   const [devices, setDevices] = useState([])
   const [lobs, setLobs] = useState([])
@@ -91,6 +95,111 @@ export default function DfPanel() {
     return (lobs || []).filter(l => (l.t || 0) >= cut).slice(-12)
   }, [lobs])
 
+  // ── DF alerts: fire a `newLoB` whenever a fresh LoB lands in the SDR feed.
+  // Tracked by id (or by t+azimuth if id is missing) so re-polling /sdr/state
+  // doesn't re-fire on every tick — only on genuinely new arrivals.
+  const fireDfAlert = useDfAlerts((s) => s.fire)
+  const seenLobIdsRef = useRef(new Set())
+  useEffect(() => {
+    if (!lobs?.length) return
+    let fired = 0
+    for (const l of lobs) {
+      const key = l.id || `${l.t}|${l.azimuth_deg}|${l.frequency_hz}`
+      if (seenLobIdsRef.current.has(key)) continue
+      seenLobIdsRef.current.add(key)
+      // On first observation of a non-empty feed we DON'T want to flood with
+      // alerts for every historical LoB — so skip the burst when this is the
+      // initial population pass.
+      if (seenLobIdsRef.current.size === lobs.length && lobs.length > 1) break
+      const fMHz = Number.isFinite(l.frequency_hz) && l.frequency_hz > 0
+        ? `${(l.frequency_hz / 1e6).toFixed(3)} MHz` : '—'
+      fireDfAlert('newLoB', `${fMHz} · ${Number(l.azimuth_deg ?? 0).toFixed(1)}°`)
+      if (++fired >= 3) break                  // throttle: at most 3 alerts per poll cycle
+    }
+    // Garbage-collect stale ids so the Set doesn't grow forever during long sessions.
+    if (seenLobIdsRef.current.size > 4096) seenLobIdsRef.current = new Set(
+      lobs.map(l => l.id || `${l.t}|${l.azimuth_deg}|${l.frequency_hz}`)
+    )
+  }, [lobs, fireDfAlert])
+  const [alertSettingsOpen, setAlertSettingsOpen] = useState(false)
+
+  // ── Live-AoA solver (moved here from the SDR console) ───────────────────
+  // Triggers a one-shot AoA solve on the currently-selected coherent SDR.
+  // Belongs on the DF tab because the result IS the DF observable — and the
+  // array geometry / method belongs alongside the LoB workflow it feeds.
+  const [aoaForm, setAoaForm] = useState({ device_id: '', frequency_hz: '433920000', method: 'music',
+                                            n_snapshots: 4096, array_type: 'uca', n: 5, spacing_wavelengths: 0.4 })
+  const [aoaResult, setAoaResult] = useState(null)
+  const [aoaBusy, setAoaBusy] = useState(false)
+  const [aoaErr, setAoaErr] = useState('')
+  useEffect(() => { if (dev?.id && !aoaForm.device_id) setAoaForm(f => ({ ...f, device_id: dev.id })) }, [dev?.id])  // eslint-disable-line
+  // ── ML-grid fusion of the current LoB list (more robust than pair-intersection
+  // when LoB σ is non-Gaussian or baselines are oblique). Optionally drops the
+  // MAP fix on the map as an algorithm-origin emitter.
+  const [advBusy, setAdvBusy] = useState(false)
+  const [advFix, setAdvFix] = useState(null)
+  const [advErr, setAdvErr] = useState('')
+  const [advMode, setAdvMode] = useState('ml_grid')   // 'ml_grid' | 'ekf'
+
+  const lobToAoaObs = (l) => {
+    // Each LoB carries {observer_lat, observer_lon, true_bearing_deg, sigma_deg}
+    const lat = l.observer_lat ?? l.lat ?? l.observer?.lat
+    const lon = l.observer_lon ?? l.lon ?? l.observer?.lon
+    const brg = l.true_bearing_deg ?? l.bearing_deg ?? l.bearing
+    const sig = l.sigma_deg ?? l.bearing_sigma_deg ?? 3.0
+    if (lat == null || lon == null || brg == null) return null
+    return { kind: 'aoa', lat: Number(lat), lon: Number(lon),
+              bearing_deg: Number(brg), sigma_deg: Number(sig) }
+  }
+
+  const runAdvFusion = async () => {
+    setAdvBusy(true); setAdvFix(null); setAdvErr('')
+    try {
+      const obs = lobs.map(lobToAoaObs).filter(Boolean)
+      if (obs.length < 2) throw new Error('Need at least 2 LoBs with observer + bearing to fuse')
+      let r
+      if (advMode === 'ml_grid') {
+        r = await algoMlGridFusion({ observations: obs, sigma_aoa_deg: obs[0].sigma_deg || 3.0,
+                                       grid_span_m: 30_000, grid_step_m: 50 })
+      } else {
+        r = await algoEkfTrack({ observations: obs, sigma_aoa_deg: obs[0].sigma_deg || 3.0 })
+      }
+      if (!r?.ok) throw new Error(r?.error || 'fusion failed')
+      setAdvFix(r)
+    } catch (e) {
+      setAdvErr(String(e?.response?.data?.detail || e?.message || e))
+    } finally { setAdvBusy(false) }
+  }
+
+  const sendAdvToMap = () => {
+    if (!advFix?.estimate || !onSendAlgorithmFixToMap) return
+    onSendAlgorithmFixToMap({
+      lat: advFix.estimate.lat, lon: advFix.estimate.lon,
+      label: `DF→${advMode === 'ml_grid' ? 'ML-grid' : 'EKF'} (${lobs.length} LoB${lobs.length === 1 ? '' : 's'}, CEP ${Math.round(advFix.uncertainty?.cep_m || 0)}m)`,
+      method_id: advMode === 'ml_grid' ? 'ml_grid_fusion' : 'ekf_track',
+      method_name: advMode === 'ml_grid' ? 'ML grid fusion (DF LoBs)' : 'EKF kinematic (DF LoBs)',
+      cep_m: advFix.uncertainty?.cep_m, raw: advFix,
+    })
+  }
+
+  const runAoaLive = async () => {
+    const freq = Number(aoaForm.frequency_hz)
+    if (!freq || freq <= 0) { setAoaErr('Enter a frequency in Hz'); return }
+    setAoaBusy(true); setAoaResult(null); setAoaErr('')
+    try {
+      const f = aoaForm
+      const array = f.array_type === 'ula'
+        ? { type: 'ula', n: Number(f.n) || 4, spacing_m: (Number(f.spacing_wavelengths) || 0.4) * (299_792_458 / freq) }
+        : { type: 'uca', n: Number(f.n) || 5, radius_m: ((Number(f.spacing_wavelengths) || 0.4) * (299_792_458 / freq)) / (2 * Math.sin(Math.PI / (Number(f.n) || 5))) }
+      const r = await solveAoaLive({ array, frequency_hz: freq, device_id: f.device_id || undefined,
+                                       method: f.method, n_snapshots: Number(f.n_snapshots) || 4096,
+                                       sample_rate_hz: 2_400_000 })
+      setAoaResult(r)
+    } catch (e) {
+      setAoaErr('AoA live failed: ' + (e?.response?.data?.detail || e?.message || e))
+    } finally { setAoaBusy(false) }
+  }
+
   const applyThreshold = async (v) => {
     setThreshold(v)
     if (dev) updateSdrDevice(dev.id, { df_threshold_dbm: Number(v) }).catch(() => {})
@@ -99,6 +208,37 @@ export default function DfPanel() {
     if (!dev) return
     try { setAudioStatus(await startSdrAudio(dev.id, tuneHz, demod)) }
     catch (e) { setAudioStatus({ status: 'error', detail: String(e?.response?.data?.detail || e?.message || e) }) }
+  }
+  // Auto-detect PTT standard at the current tune frequency and update the
+  // mode dropdown to the recognised standard. Surfaces the classifier's
+  // verdict + alternatives in the status line.
+  const [autoBusy, setAutoBusy] = useState(false)
+  const [autoVerdict, setAutoVerdict] = useState(null)
+  const autoDetectPtt = async () => {
+    if (!dev) { setAudioStatus({ status: 'error', detail: 'Select an SDR first' }); return }
+    setAutoBusy(true); setAutoVerdict(null)
+    try {
+      const r = await identifyPtt({ device_id: dev.id, frequency_hz: tuneHz, capture_seconds: 0.5 })
+      if (!r?.ok) {
+        setAudioStatus({ status: 'error', detail: r?.error || 'identify failed' })
+        return
+      }
+      const v = r.verdict
+      setAutoVerdict(r)
+      // Set the dropdown to the detected mode (the option may not exist if the
+      // catalogue is empty; fall back to nfm so listen() still works).
+      const candidate = v.audio_mode || 'nfm'
+      const exists = (audioModes.length ? audioModes : [{ id: 'nfm' }]).some(m => m.id === candidate)
+      setDemod(exists ? candidate : 'nfm')
+      const decAvail = r.decoder_available ? '✓' : '✗ (not installed)'
+      const fallback = r.fallback_decoder ? ` · fallback decoder: ${r.fallback_decoder}` : ''
+      setAudioStatus({
+        status: 'auto_detected',
+        detail: `→ ${v.label} (${(v.confidence * 100).toFixed(0)}%) · decoder: ${v.decoder} ${decAvail}${fallback}`,
+      })
+    } catch (e) {
+      setAudioStatus({ status: 'error', detail: 'auto-detect failed: ' + (e?.response?.data?.detail || e?.message || e) })
+    } finally { setAutoBusy(false) }
   }
   const setCompassMode = async (mode) => {
     if (!dev) return
@@ -124,9 +264,16 @@ export default function DfPanel() {
   }
 
   return (
-    <div style={{ display: 'flex', height: '100%', minHeight: 0, gap: 8, padding: 8, fontSize: 12, color: '#e6edf3' }}>
-      {/* LEFT ≈ 50% — stacked spectrum viewers (one per channel) */}
-      <div style={{ flex: '1 1 50%', minWidth: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{
+      display: 'flex', height: '100%', minHeight: 0, gap: 8, padding: 8,
+      fontSize: 12, color: '#e6edf3',
+      // Wrap onto multiple rows when the panel is narrower than ~720 px so the
+      // right-hand controls never get crushed below their minimum legible width.
+      flexWrap: 'wrap', alignContent: 'stretch', overflowY: 'auto',
+    }}>
+      {/* LEFT — stacked spectrum viewers (one per channel). Flexible width;
+          falls below the 320 px floor on very narrow viewports because of wrap. */}
+      <div style={{ flex: '2 1 360px', minWidth: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <select style={{ ...inp, width: 'auto' }} value={devId || ''} onChange={e => setDevId(e.target.value)}>
             {devices.map(d => <option key={d.id} value={d.id}>{d.name} · {d.source_class === 'single_channel' ? '1ch' : `${d.channels}ch`}{d.source_class === 'single_channel' ? ' (no DF)' : ''}</option>)}
@@ -156,20 +303,37 @@ export default function DfPanel() {
         })()}
       </div>
 
-      {/* MIDDLE — compass of LoB bearings */}
-      <div style={{ flex: '0 0 200px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', gap: 6 }}>
-        <Compass lobs={recentLobs} dev={dev} />
+      {/* MIDDLE — compass + B-scope. Bounded width so it neither overgrows on
+          big screens nor crushes the spectra on narrow ones. */}
+      <div style={{
+        flex: '1 1 220px', minWidth: 200, maxWidth: 320,
+        display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <Compass lobs={recentLobs} dev={dev} />
+        </div>
         <div style={{ fontSize: 10, color: '#8b949e', textAlign: 'center' }}>
           {canDf ? `${recentLobs.length} active LoB(s)` : 'single-channel — no LoBs (DF needs ≥2 coherent channels)'}
           {dev?.azimuth_reference === 'relative' && <div>(clock = off the antenna front, heading {Math.round(dev.antenna_heading_deg || 0)}°)</div>}
         </div>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#8b949e', letterSpacing: 0.6, marginBottom: 2, textTransform: 'uppercase' }}>
+            B-scope (bearing × time)
+          </div>
+          <BearingTimeScope lobs={lobs} height={140} windowSec={60} />
+        </div>
       </div>
 
-      {/* RIGHT — DF options & parameters */}
-      <div style={{ flex: '0 0 230px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, borderLeft: '1px solid #21262d', paddingLeft: 8 }}>
+      {/* RIGHT — DF options & parameters. Flex with a minimum so it never goes
+          below readable width; wraps to its own row below ~720 px panel width. */}
+      <div style={{
+        flex: '1 1 240px', minWidth: 220, maxWidth: 360,
+        overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8,
+        borderLeft: '1px solid #21262d', paddingLeft: 8,
+      }}>
         <div>
           <span style={lab}>DF tune frequency (drop the tuner on a signal in the spectrum, or type)</span>
-          <input style={{ ...inp, width: 130 }} type="number" value={Math.round(tuneHz)} onChange={e => setTuneHz(Number(e.target.value) || tuneHz)} /> Hz
+          <input style={{ ...inp, width: '100%', maxWidth: 160 }} type="number" value={Math.round(tuneHz)} onChange={e => setTuneHz(Number(e.target.value) || tuneHz)} /> Hz
           <div style={{ fontSize: 10, color: '#6e7681' }}>{(tuneHz / 1e6).toFixed(5)} MHz</div>
         </div>
         <div>
@@ -184,18 +348,37 @@ export default function DfPanel() {
         </div>
         <div>
           <span style={lab}>demodulate / decode &amp; listen</span>
-          <select style={{ ...inp, width: 170 }} value={demod} onChange={e => setDemod(e.target.value)}>
-            {(audioModes.length ? audioModes : [{ id: 'nfm', label: 'Narrowband FM' }]).map(m =>
-              <option key={m.id} value={m.id}>{m.label}{m.ready === false ? ' (decoder not installed)' : ''}</option>)}
-          </select>
-          <button style={{ ...btn, marginLeft: 6 }} onClick={listen}>▶ Listen</button>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select style={{ ...inp, flex: 1, minWidth: 120, maxWidth: 220 }} value={demod} onChange={e => setDemod(e.target.value)}>
+              {(audioModes.length ? audioModes : [{ id: 'nfm', label: 'Narrowband FM' }]).map(m =>
+                <option key={m.id} value={m.id}>{m.label}{m.ready === false ? ' (decoder not installed)' : ''}</option>)}
+            </select>
+            <button style={btn} onClick={listen}>▶ Listen</button>
+            <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb', color: '#fff' }}
+                    disabled={autoBusy || !dev} onClick={autoDetectPtt}
+                    title="Capture a short IQ window at the tuned frequency and pick the right decoder automatically (DMR / P25 / TETRA / NXDN / D-STAR / YSF / M17 / …)">
+              {autoBusy ? '…' : '🎯 Auto-detect'}
+            </button>
+          </div>
           {audioStatus && <div style={{ fontSize: 10, color: (audioStatus.status === 'error' || (audioStatus.detail || '').startsWith('⚠')) ? '#f85149' : '#8b949e', marginTop: 3 }}>{audioStatus.detail || audioStatus.status}</div>}
+          {autoVerdict?.candidates?.length > 1 && (
+            <div style={{ marginTop: 4, fontSize: 10, color: '#6e7681' }}>
+              alt: {autoVerdict.candidates.slice(1, 4).map((c, i) =>
+                <span key={i}>{i > 0 ? ' · ' : ''}{c.label} {(c.score * 100).toFixed(0)}%{c.decoder_installed ? '' : ' ✗'}</span>
+              )}
+            </div>
+          )}
+          {autoVerdict?.evidence && (
+            <div style={{ marginTop: 2, fontSize: 9, color: '#6e7681' }}>
+              evidence: bw {Math.round(autoVerdict.evidence.bandwidth_hz)} Hz · sym {Math.round(autoVerdict.evidence.symbol_rate_hz)} Hz (c={(autoVerdict.evidence.symbol_rate_confidence || 0).toFixed(2)}) · fam {autoVerdict.evidence.family_detected}
+            </div>
+          )}
         </div>
         {/* Compass mode (3) + calibration */}
         {dev && dev.source_class !== 'single_channel' && (
           <div style={{ borderTop: '1px solid #21262d', paddingTop: 6 }}>
             <span style={lab}>compass mode</span>
-            <select style={{ ...inp, width: 200 }} value={dev.azimuth_reference || 'absolute'} onChange={e => setCompassMode(e.target.value)}>
+            <select style={{ ...inp, width: '100%' }} value={dev.azimuth_reference || 'absolute'} onChange={e => setCompassMode(e.target.value)}>
               {(compass?.modes || [{ id: 'absolute', label: 'Absolute LOB (true north)' }, { id: 'relative', label: 'Relative LOB (off the antenna front)' }, { id: 'clock', label: 'Clock position (off the antenna front)' }]).map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
             </select>
             <div style={{ fontSize: 10, color: '#6e7681', marginTop: 2 }}>antenna heading: {Math.round(dev.antenna_heading_deg || 0)}° · Absolute LOB = (0 + heading) + Relative LOB</div>
@@ -227,6 +410,85 @@ export default function DfPanel() {
             <div style={{ color: '#6e7681' }}>{acc.note}</div>
           </div>
         )}
+        {/* Advanced fusion across LoBs (ML grid / EKF) — produces a richer fix
+            than the simple pair-intersection in df/fusion.fuse_aoa_aoa. */}
+        <div style={{ borderTop: '1px solid #21262d', paddingTop: 6 }}>
+          <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 4 }}>
+            Advanced fusion — {lobs.length} live LoB(s) → joint emitter fix (in-process, no external service)
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+            <select style={{ ...inp, width: 130 }} value={advMode} onChange={e => setAdvMode(e.target.value)}>
+              <option value="ml_grid">ML grid fusion</option>
+              <option value="ekf">EKF kinematic</option>
+            </select>
+            <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} disabled={advBusy || lobs.length < 2} onClick={runAdvFusion}>
+              {advBusy ? 'Fusing…' : `Fuse ${lobs.length} LoB${lobs.length === 1 ? '' : 's'}`}
+            </button>
+            {advFix?.estimate && onSendAlgorithmFixToMap && (
+              <button style={{ ...btn, background: '#238636', borderColor: '#238636' }} onClick={sendAdvToMap}>
+                Send to map
+              </button>
+            )}
+          </div>
+          {advFix?.estimate && (
+            <div style={{ marginTop: 4, fontSize: 11 }}>
+              <strong style={{ color: '#06d6a0' }}>
+                {advFix.estimate.lat.toFixed(5)}, {advFix.estimate.lon.toFixed(5)}
+              </strong>
+              {advFix.uncertainty?.cep_m != null && <span style={{ color: '#6e7681' }}> · CEP {Math.round(advFix.uncertainty.cep_m)} m</span>}
+              {advFix.fit?.log_likelihood != null && <span style={{ color: '#6e7681' }}> · log-L {advFix.fit.log_likelihood.toFixed(2)}</span>}
+            </div>
+          )}
+          {advErr && <div style={{ marginTop: 4, fontSize: 10, color: '#f85149' }}>{advErr}</div>}
+          <div style={{ marginTop: 2, fontSize: 9, color: '#6e7681' }}>
+            ML grid: brute-force joint MAP over a 2-D grid; better than pair-intersection when LoBs are oblique or σ is large.
+            EKF: sequential Kalman update over LoBs; lets a moving DF head refine as it gathers bearings.
+          </div>
+        </div>
+        <div style={{ borderTop: '1px solid #21262d', paddingTop: 6 }}>
+          <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 4 }}>Live AoA solver — array + method + frequency, run a one-shot solve on the selected SDR</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+            <input style={{ ...inp, width: 110 }} placeholder="freq (Hz)" value={aoaForm.frequency_hz}
+                   onChange={e => setAoaForm(f => ({ ...f, frequency_hz: e.target.value }))} />
+            <select style={{ ...inp, width: 88 }} value={aoaForm.method}
+                    onChange={e => setAoaForm(f => ({ ...f, method: e.target.value }))}>
+              <option value="music">MUSIC</option><option value="capon">Capon</option><option value="bartlett">Bartlett</option>
+            </select>
+            <select style={{ ...inp, width: 64 }} value={aoaForm.array_type}
+                    onChange={e => setAoaForm(f => ({ ...f, array_type: e.target.value }))}>
+              <option value="uca">UCA</option><option value="ula">ULA</option>
+            </select>
+            <input style={{ ...inp, width: 40 }} title="elements" value={aoaForm.n}
+                   onChange={e => setAoaForm(f => ({ ...f, n: e.target.value }))} />
+            <input style={{ ...inp, width: 60 }} title="spacing/radius (λ)" value={aoaForm.spacing_wavelengths}
+                   onChange={e => setAoaForm(f => ({ ...f, spacing_wavelengths: e.target.value }))} />
+            <input style={{ ...inp, width: 70 }} title="snapshots" value={aoaForm.n_snapshots}
+                   onChange={e => setAoaForm(f => ({ ...f, n_snapshots: e.target.value }))} />
+            <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} disabled={aoaBusy} onClick={runAoaLive}>
+              {aoaBusy ? 'Solving…' : 'Solve AoA'}
+            </button>
+          </div>
+          {aoaResult && (
+            <div style={{ marginTop: 4, fontSize: 11 }}>
+              <strong style={{ color: '#06d6a0' }}>{aoaResult.azimuth_deg != null ? `${aoaResult.azimuth_deg.toFixed(1)}°` : '—'}</strong>
+              {aoaResult.azimuth_sigma_deg != null && <span style={{ color: '#6e7681' }}> ±{aoaResult.azimuth_sigma_deg.toFixed(2)}°</span>}
+              {aoaResult.elevation_deg != null && <span> · el {aoaResult.elevation_deg.toFixed(1)}°</span>}
+              {aoaResult.snr_db != null && <span> · SNR {aoaResult.snr_db.toFixed(1)} dB</span>}
+              <div style={{ color: '#6e7681', fontSize: 10 }}>
+                {aoaResult.method?.toUpperCase()} · {aoaResult.snapshots} snapshots × {aoaResult.channels} ch · {aoaResult.iq_source}
+                {aoaResult.synthetic ? ' (synthetic IQ — install SoapySDR to go live)' : ''}
+                {aoaResult.ambiguities?.length > 0 && ` · alt: ${aoaResult.ambiguities.map(a => `${a.az_deg?.toFixed?.(0)}°`).join(', ')}`}
+              </div>
+            </div>
+          )}
+          {aoaErr && <div style={{ marginTop: 4, fontSize: 10, color: '#f85149' }}>{aoaErr}</div>}
+        </div>
+        <div style={{ borderTop: '1px solid #21262d', paddingTop: 6 }}>
+          <button style={btn} onClick={() => setAlertSettingsOpen(v => !v)}>
+            🔔 {alertSettingsOpen ? 'Hide' : 'DF alerts…'}
+          </button>
+          {alertSettingsOpen && <div style={{ marginTop: 6 }}><DfAlertsSettings /></div>}
+        </div>
         <div style={{ fontSize: 10, color: '#6e7681', borderTop: '1px solid #21262d', paddingTop: 6 }}>
           GPS: {gps ? `${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)} (${gps.source})` : 'not set — set it in the SDR console; LoBs plot from your location'}
         </div>
@@ -235,11 +497,14 @@ export default function DfPanel() {
   )
 }
 
-function Compass({ lobs = [], dev = null }) {
+function Compass({ lobs = [], dev = null, maxSize = 200 }) {
+  // SVG draws in a fixed 180-unit viewBox; the CSS width sizes it to the parent
+  // with a hard cap of maxSize so it never bloats on very wide panels.
   const S = 180, c = S / 2, R = c - 14
   const heading = dev?.azimuth_reference === 'relative' ? (dev.antenna_heading_deg || 0) : 0
   return (
-    <svg width={S} height={S} style={{ marginTop: 6 }}>
+    <svg viewBox={`0 0 ${S} ${S}`} preserveAspectRatio="xMidYMid meet"
+         style={{ width: '100%', maxWidth: maxSize, height: 'auto', marginTop: 6 }}>
       <circle cx={c} cy={c} r={R} fill="#0a0e13" stroke="#30363d" />
       {[0, 90, 180, 270].map(a => {
         const rad = (a - 90) * Math.PI / 180

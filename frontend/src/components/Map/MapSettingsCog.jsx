@@ -33,6 +33,8 @@ export default function MapSettingsCog({
   const resetMapColors = useMapPrefs((s) => s.resetMapColors)
   const coverageMode = useMapPrefs((s) => s.coverageMode)
   const setCoverageMode = useMapPrefs((s) => s.setCoverageMode)
+  const nightVision = useMapPrefs((s) => s.nightVision)
+  const setNightVision = useMapPrefs((s) => s.setNightVision)
 
   const [open, setOpen] = useState(false)
   const [anchor, setAnchor] = useState(null)   // {top,right} viewport coords below the trigger — popup is position:fixed so .map-container's overflow:hidden can't clip it
@@ -134,6 +136,20 @@ export default function MapSettingsCog({
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#484f58', marginTop: 2 }}>
               <span>20%</span><span>100%</span><span>150%</span>
             </div>
+          </div>
+
+          {/* Night vision */}
+          <div style={SECTION}>
+            <div style={HDR}>Night Vision</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+              <div onClick={() => setNightVision(!nightVision)} style={{
+                width: 36, height: 20, borderRadius: 10, cursor: 'pointer', flexShrink: 0,
+                background: nightVision ? '#ef4444' : '#30363d', position: 'relative', transition: 'background 0.2s',
+              }}>
+                <div style={{ position: 'absolute', top: 2, left: nightVision ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left 0.2s' }} />
+              </div>
+              <span style={{ fontSize: 12, color: '#c9d1d9' }}>Red palette (preserves dark adaptation)</span>
+            </label>
           </div>
 
           {/* Feature colours */}

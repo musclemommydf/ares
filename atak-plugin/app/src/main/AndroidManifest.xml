@@ -1,22 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- ARES-ATAK plugin manifest (skeleton). ATAK loads the plugin via the
-     transapps Lifecycle/Tool classes declared in assets/plugin.xml; this
-     manifest mostly declares permissions + the plugin api version meta-data. -->
+<!--
+  ARES-ATAK plugin manifest. The takdev gradle plugin injects the matching
+  ATAK API version into <meta-data android:name="plugin-api"> at build time
+  (from the SDK's main.jar), so we don't hard-code it here.
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.ares.atak.plugin">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- coverage KMZ export goes to atak/ARES/KMZ/ (scoped storage / ATAK's dir) -->
+    <!-- coverage KMZ export writes to atak/ARES/KMZ/ via the host's scoped storage; no extra perm needed. -->
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:label="@string/app_name">
 
-        <!-- ATAK plugin API version this build targets. MUST match the SDK. -->
-        <meta-data android:name="plugin-api" android:value="@string/plugin_api" />
-
-        <!-- The transapps plugin descriptor. -->
+        <!-- ATAK plugin descriptor — registers AresPlugin (IPlugin) via assets/plugin.xml. -->
         <meta-data android:name="app_desc" android:value="@string/app_desc" />
+        <!-- takdev fills this in at build time; the placeholder lets a non-takdev
+             build still parse. -->
+        <meta-data android:name="plugin-api" android:value="@string/plugin_api" />
     </application>
 </manifest>

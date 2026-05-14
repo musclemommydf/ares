@@ -15,10 +15,11 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { X, Plus, RefreshCw, Trash2, Wifi, WifiOff, AlertCircle, Activity, Radio, Save } from 'lucide-react'
+import CellularPanel from './CellularPanel'
 import {
   listSdrDevices, createSdrDevice, updateSdrDevice, deleteSdrDevice, testSdrDevice,
   getSdrState, createSdrSocket, getDfAccuracyEstimate, getGpsFix, setGpsFix,
-  getGpsSource, setGpsSource, getDfIqBackend, solveAoaLive,
+  getGpsSource, setGpsSource, getDfIqBackend,
   addSdrPeer, removeSdrPeer, getSdrPeers,
 } from '../../api/client'
 
@@ -49,9 +50,6 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
   const [gpsSrcForm, setGpsSrcForm] = useState({ kind: 'manual', host: '127.0.0.1', port: 2947, path: '/dev/ttyUSB0', baud: 9600, device_args: '' })
   const [gpsWatchId, setGpsWatchId] = useState(null)      // navigator.geolocation.watchPosition id (browser source)
   const [iqBackend, setIqBackend] = useState(null)        // /df/iq_backend — native IQ capture status + SDR(s) seen by SoapySDR
-  const [aoaForm, setAoaForm] = useState({ device_id: '', frequency_hz: '433920000', method: 'music', n_snapshots: 4096, array_type: 'uca', n: 5, spacing_wavelengths: 0.4 })
-  const [aoaResult, setAoaResult] = useState(null)
-  const [aoaBusy, setAoaBusy] = useState(false)
   const [mesh, setMesh] = useState(null)
   const [peerInput, setPeerInput] = useState('')
   const [wsState, setWsState] = useState('connecting')
@@ -180,25 +178,6 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
   }
 
   // ── Native AoA from a connected SDR (or the synthetic coherent fallback) ──
-  const runAoaLive = async () => {
-    const f = aoaForm
-    const freq = Number(f.frequency_hz)
-    if (!freq || freq <= 0) { setErrText('AoA: enter a frequency in Hz'); return }
-    setAoaBusy(true); setAoaResult(null)
-    try {
-      const array = f.array_type === 'ula'
-        ? { type: 'ula', n: Number(f.n) || 4, spacing_m: (Number(f.spacing_wavelengths) || 0.4) * (299_792_458 / freq) }
-        : { type: 'uca', n: Number(f.n) || 5, radius_m: ((Number(f.spacing_wavelengths) || 0.4) * (299_792_458 / freq)) / (2 * Math.sin(Math.PI / (Number(f.n) || 5))) }
-      const r = await solveAoaLive({
-        array, frequency_hz: freq, device_id: f.device_id || undefined,
-        method: f.method, n_snapshots: Number(f.n_snapshots) || 4096,
-        sample_rate_hz: 2_400_000,
-      })
-      setAoaResult(r)
-    } catch (e) {
-      setErrText('AoA live failed: ' + (e?.response?.data?.detail || e?.message || e))
-    } finally { setAoaBusy(false) }
-  }
   const refreshIqBackend = async () => { try { setIqBackend(await getDfIqBackend()) } catch {} }
 
   const addPeer = async () => {
@@ -345,7 +324,7 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
             )}
           </Section>
 
-          <Section title="Native IQ capture / live DF">
+          <Section title="Native IQ capture backend">
             <div style={{ fontSize: 12, color: '#c9d1d9', marginBottom: 6 }}>
               Backend: <strong>{iqBackend?.backend || '…'}</strong>
               {iqBackend?.available ? <span style={{ color: '#3fb950' }}> · SoapySDR present</span>
@@ -354,68 +333,23 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
               <button style={{ ...btn, marginLeft: 6, fontSize: 10, padding: '1px 6px' }} onClick={refreshIqBackend}>↻</button>
             </div>
             {iqBackend?.devices?.length > 0 && (
-              <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 4, padding: 6, marginBottom: 6, maxHeight: 110, overflowY: 'auto' }}>
+              <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 4, padding: 6, marginBottom: 6, maxHeight: 130, overflowY: 'auto' }}>
                 {iqBackend.devices.map(d => (
                   <div key={d.id || d.args} style={{ display: 'flex', gap: 8, fontSize: 11, padding: '2px 4px', borderBottom: '1px solid #161b22' }}>
                     <span style={{ color: '#8b949e', minWidth: 90 }}>{d.kind}</span>
                     <span style={{ color: '#c9d1d9', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.args}>{d.label || d.id}</span>
                     <span style={{ color: '#6e7681' }}>{d.channels}ch{d.coherent_rx ? ' coherent' : ''}</span>
-                    <button style={{ ...btn, fontSize: 10, padding: '1px 6px' }} onClick={() => setAoaForm(f => ({ ...f, device_id: d.id || '' }))}>use for AoA</button>
                   </div>
                 ))}
               </div>
             )}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', marginBottom: 4 }}>
-              <span style={{ fontSize: 11, color: '#8b949e' }}>Solve AoA live:</span>
-              <input style={{ ...inputStyle, width: 100 }} placeholder="freq (Hz)" value={aoaForm.frequency_hz}
-                     onChange={e => setAoaForm(f => ({ ...f, frequency_hz: e.target.value }))} />
-              <select style={{ ...inputStyle, fontSize: 11 }} value={aoaForm.method}
-                      onChange={e => setAoaForm(f => ({ ...f, method: e.target.value }))}>
-                <option value="music">MUSIC</option><option value="capon">Capon / MVDR</option><option value="bartlett">Bartlett</option>
-              </select>
-              <select style={{ ...inputStyle, fontSize: 11 }} value={aoaForm.array_type}
-                      onChange={e => setAoaForm(f => ({ ...f, array_type: e.target.value }))}>
-                <option value="uca">UCA</option><option value="ula">ULA</option>
-              </select>
-              <input style={{ ...inputStyle, width: 40 }} title="elements" value={aoaForm.n}
-                     onChange={e => setAoaForm(f => ({ ...f, n: e.target.value }))} />
-              <input style={{ ...inputStyle, width: 60 }} title="spacing / radius (λ)" value={aoaForm.spacing_wavelengths}
-                     onChange={e => setAoaForm(f => ({ ...f, spacing_wavelengths: e.target.value }))} />
-              <input style={{ ...inputStyle, width: 70 }} title="snapshots" value={aoaForm.n_snapshots}
-                     onChange={e => setAoaForm(f => ({ ...f, n_snapshots: e.target.value }))} />
-              <input style={{ ...inputStyle, width: 140 }} placeholder="device id (blank = first)" value={aoaForm.device_id}
-                     onChange={e => setAoaForm(f => ({ ...f, device_id: e.target.value }))} />
-              <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} disabled={aoaBusy} onClick={runAoaLive}>
-                {aoaBusy ? 'Solving…' : 'Solve AoA Live'}
-              </button>
+            <div style={{ fontSize: 10, color: '#6e7681' }}>
+              Live-AoA solve, LoB workflow and the DF picture live on the <strong>DF</strong> tab — this section is now just SoapySDR /
+              SDR-discovery status so the SDR console stays a setup surface.
             </div>
-            {aoaResult && (
-              <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 4, padding: 6, fontSize: 11 }}>
-                <div>
-                  <strong style={{ color: '#06d6a0' }}>{aoaResult.azimuth_deg != null ? `${aoaResult.azimuth_deg.toFixed(1)}°` : '—'}</strong>
-                  {aoaResult.azimuth_sigma_deg != null && <span style={{ color: '#6e7681' }}> ±{aoaResult.azimuth_sigma_deg.toFixed(2)}°</span>}
-                  {aoaResult.elevation_deg != null && <span> · el {aoaResult.elevation_deg.toFixed(1)}°</span>}
-                  {aoaResult.snr_db != null && <span> · SNR {aoaResult.snr_db.toFixed(1)} dB</span>}
-                </div>
-                <div style={{ color: '#6e7681', fontSize: 10 }}>
-                  {aoaResult.method?.toUpperCase()} · {aoaResult.snapshots} snapshots × {aoaResult.channels} ch · {aoaResult.iq_source}
-                  {aoaResult.synthetic ? ' (synthetic IQ — install SoapySDR + the device module to go live)' : ''}
-                  {aoaResult.ambiguities?.length > 0 && ` · alt: ${aoaResult.ambiguities.map(a => `${a.az_deg?.toFixed?.(0)}°`).join(', ')}`}
-                </div>
-              </div>
-            )}
           </Section>
 
-          <Section title="Live DF picture">
-            <div style={{ fontSize: 12, color: '#c9d1d9' }}>
-              {lobs.length} LoB(s) buffered · {fixes.length} fix update(s) · LoBs and fixes appear on the 2D / 3D map automatically.
-              {fixes.length > 0 && (() => {
-                const last = fixes[fixes.length - 1]
-                const c = last.centroid
-                return c ? <>  Latest fix: <strong>{last.kind?.toUpperCase()}</strong> @ {c.lat.toFixed(5)}, {c.lon.toFixed(5)}{last.cep ? ` (CEP ${Math.round(last.cep.semiMajorM)} m)` : ''}{last.frequency_hz ? ` · ${(last.frequency_hz / 1e6).toFixed(3)} MHz` : ''}</> : null
-              })()}
-            </div>
-          </Section>
+          <CellularPanel devices={iqBackend?.devices || []} />
 
           <Section title="GPS — operator location">
             <div style={{ fontSize: 12, color: '#c9d1d9' }}>
@@ -500,12 +434,8 @@ export default function SdrPanel({ onClose, mapCenter, onSdrFeatures, onSdrCover
             </div>
           </Section>
 
-          <Section title="CoT push (→ ATAK / TAK Server)">
-            <div style={{ fontSize: 12, color: '#8b949e' }}>
-              CoT push targets — where LoBs &amp; fixes are sent (UDP multicast / TCP / TLS) — are configured on the
-              <strong> ATAK / Server</strong> console (the 🖥 button in the header), alongside the other TAK-server options.
-            </div>
-          </Section>
+          {/* CoT push targets are configured on the ATAK / Server console (🖥 in the header);
+              the empty signpost that used to live here was removed — see AtakServerPanel. */}
 
           {errText && (
             <div style={{ fontSize: 11, color: errText.startsWith('✓') ? '#3fb950' : '#f85149',

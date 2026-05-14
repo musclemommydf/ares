@@ -2,7 +2,10 @@ import { ChevronDown } from 'lucide-react'
 
 const SIMPLE_TABS = [
   ['results', 'Results'], ['3d', '3D View'],
-  ['terrain', 'Terrain Profile'], ['df', 'DF'], ['emitters', 'Emitter Summary'],
+  ['terrain', 'Terrain Profile'], ['df', 'DF'], ['algorithms', 'Algorithms'],
+  ['targets', 'Targets'],
+  ['emitters', 'Emitter Summary'],
+  ['tracks', 'Tracks'], ['passive_radar', 'Passive Radar'], ['activity', 'Activity'],
   ['video', 'Video'], ['chat', 'Chat'],
 ]
 

@@ -1,23 +1,39 @@
-// ARES-ATAK plugin — root build file (skeleton).
-//
-// NOTE: this does not resolve until you point it at the ATAK-CIV SDK from
-// tak.gov (the `atak-gradle-plugin` + `main.jar`). See README.md. Versions below
-// are placeholders — match them to the ATAK SDK you target (~5.5 on `main`).
+// ARES-ATAK plugin — root build file. Loads the takdev gradle plugin (the ATAK
+// SDK build helper) from the directory pointed to by `takdev.plugin` in
+// local.properties. The takdev jar lives in the unzipped tak.gov SDK; we don't
+// copy it into the repo to stay clean of tak.gov-licensed artefacts.
+
+import java.util.Properties
 
 buildscript {
     ext.kotlin_version = '1.9.24'
-    ext.atak_plugin_gradle_version = '2.+'   // TODO: pin to the SDK's atak-gradle-plugin version
+
+    // Read takdev.plugin from local.properties — that's where atak-gradle-takdev.jar lives.
+    def lp = new Properties()
+    def lpFile = new File(rootDir, 'local.properties')
+    if (lpFile.exists()) lp.load(new FileInputStream(lpFile))
+    ext.takdevDir = lp.getProperty('takdev.plugin', rootDir.absolutePath)
 
     repositories {
         google()
         mavenCentral()
-        // TODO: add the TAK maven repo (credentials from local.properties), e.g.:
-        // maven { url takRepoUrl; credentials { username takRepoUser; password takRepoPassword } }
+        flatDir { dirs ext.takdevDir }              // atak-gradle-takdev.jar
+        // tak.gov maven mirror (optional — only when not using takdev.plugin)
+        if (lp.getProperty('takrepo.url')) {
+            maven {
+                url lp.getProperty('takrepo.url')
+                credentials {
+                    username lp.getProperty('takrepo.user')
+                    password lp.getProperty('takrepo.password')
+                }
+            }
+        }
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.5.0'        // TODO: match SDK
+        classpath 'com.android.tools.build:gradle:8.5.0'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-        // classpath "com.atakmap.gradle:atak-gradle-plugin:$atak_plugin_gradle_version"   // from tak.gov
+        classpath "org.jetbrains.kotlin:kotlin-serialization:$kotlin_version"
+        classpath ':atak-gradle-takdev:'             // resolved via flatDir above
     }
 }
 

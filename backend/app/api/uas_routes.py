@@ -82,15 +82,57 @@ def scan(device_id: Optional[str] = None,
          stop_hz: float = Query(..., gt=0),
          step_hz: float = Query(20e6, gt=1e5, le=40e6),
          use_iq: bool = True,
+         max_hold: bool = False,
+         maxhold_key: str = "default",
+         reset_maxhold: bool = False,
          _auth=Depends(require_auth)):
     if abs(stop_hz - start_hz) > 6e9:
         raise HTTPException(400, "scan span too wide (max 6 GHz per call)")
     dev = _device_dict(device_id)
-    audit("uas.scan", device=device_id or "synthetic", start_hz=start_hz, stop_hz=stop_hz)
-    return uas_video.classify_band(dev, start_hz, stop_hz, step_hz=step_hz, use_iq=use_iq)
+    audit("uas.scan", device=device_id or "synthetic", start_hz=start_hz, stop_hz=stop_hz, max_hold=max_hold)
+    return uas_video.classify_band(dev, start_hz, stop_hz, step_hz=step_hz, use_iq=use_iq,
+                                    max_hold=max_hold, maxhold_key=maxhold_key,
+                                    reset_maxhold=reset_maxhold)
+
+
+@router.post("/scan/maxhold/reset")
+def reset_scan_maxhold(maxhold_key: str = "default", _auth=Depends(require_auth)):
+    uas_video.reset_max_hold(maxhold_key)
+    return {"reset": True, "maxhold_key": maxhold_key}
+
+
+@router.get("/scan/maxhold")
+def get_scan_maxhold(maxhold_key: str = "default", _auth=Depends(require_auth)):
+    snap = uas_video.get_max_hold(maxhold_key)
+    if snap is None:
+        raise HTTPException(404, f"no max-hold accumulator named {maxhold_key!r}")
+    return snap
 
 
 # ── start a decode / characterize session ────────────────────────────────────
+class AnalogOptions(BaseModel):
+    """Knobs for the in-process analog-video demod (NTSC / PAL / SECAM / VSB).
+    All fields are optional; omitted keys fall through to the demod's defaults."""
+    system: Optional[str] = None                  # ntsc | pal | secam | vsb
+    width_px: Optional[int] = Field(None, ge=64, le=2048)
+    max_frames: Optional[int] = Field(None, ge=1, le=64)
+    try_all_detectors: Optional[bool] = None
+    use_h_sync_pll: Optional[bool] = None
+    use_v_sync_detect: Optional[bool] = None
+    use_per_line_clamp: Optional[bool] = None
+    deinterlace: Optional[bool] = None
+    frame_avg_n: Optional[int] = Field(None, ge=0, le=32)
+    decode_color: Optional[bool] = None
+    peak_hold_tau_s: Optional[float] = Field(None, gt=0.0, le=5.0)
+    # operator overrides (set when auto-tune isn't getting it right)
+    line_rate_hz: Optional[float] = Field(None, gt=1000, le=200000)    # forces this scanline rate
+    frame_rate_hz: Optional[float] = Field(None, gt=1.0, le=240.0)     # forces this frame rate
+    pixel_rate_hz: Optional[float] = Field(None, gt=1e5, le=200e6)     # forces this pixel rate
+    h_offset_samples: Optional[int] = Field(None, ge=-32768, le=32768) # H-shift active region
+    v_offset_lines: Optional[int] = Field(None, ge=-512, le=512)       # V-shift active region
+    active_duration_s: Optional[float] = Field(None, gt=1e-5, le=0.1)  # active scanline duration
+
+
 class DecodeRequest(BaseModel):
     device_id: Optional[str] = None
     frequency_hz: float = Field(..., gt=0)
@@ -99,13 +141,23 @@ class DecodeRequest(BaseModel):
     channel: int = 0
     label: str = ""
     push_to_atak: bool = False
+    analog_options: Optional[AnalogOptions] = None
+    capture_seconds: float = Field(0.045, ge=0.020, le=0.5)
+
+
+def _aopts_dict(ao: Optional[AnalogOptions]) -> dict:
+    if not ao:
+        return {}
+    return {k: v for k, v in ao.model_dump().items() if v is not None}
 
 
 @router.post("/decode")
 def decode(req: DecodeRequest, _auth=Depends(require_auth)):
     dev = _device_dict(req.device_id)
     sess = uas_video.start_decode(dev, req.frequency_hz, req.feed_type,
-                                  bandwidth_hz=req.bandwidth_hz, channel=req.channel, label=req.label)
+                                  bandwidth_hz=req.bandwidth_hz, channel=req.channel, label=req.label,
+                                  analog_options=_aopts_dict(req.analog_options),
+                                  capture_seconds=req.capture_seconds)
     if "error" in sess:
         raise HTTPException(400, sess["error"])
     audit("uas.decode", device=req.device_id or "synthetic", feed_type=req.feed_type,
@@ -114,6 +166,25 @@ def decode(req: DecodeRequest, _auth=Depends(require_auth)):
         md = uas_video.session_metadata(sess["id"])
         if md and md.get("klv"):
             sess["cot"] = _push_uas_cot(sess, md)
+    return sess
+
+
+class RedemodRequest(BaseModel):
+    analog_options: Optional[AnalogOptions] = None
+    capture_seconds: Optional[float] = Field(None, ge=0.020, le=0.5)
+
+
+@router.post("/sessions/{sid}/redemod")
+def session_redemod(sid: str, req: RedemodRequest, _auth=Depends(require_auth)):
+    """Re-run the analog-video demod on a fresh capture with updated options.
+    Lets the operator tweak colormap-independent params (scanline rate, frame
+    averaging, peak-hold τ, colour decode, deinterlace, …) on a live session
+    without restarting it."""
+    sess = uas_video.redemod_session(sid,
+                                      analog_options=_aopts_dict(req.analog_options),
+                                      capture_seconds=req.capture_seconds)
+    if sess is None:
+        raise HTTPException(404, "no such session")
     return sess
 
 

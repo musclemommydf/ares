@@ -1,10 +1,11 @@
 # Ares — Build Plan
 
-> **v2.0 note.** This document describes the v1.x build. The `ares` v2.0 codebase
-> replaces the *indicative* propagation/geolocation implementations with reference-grade ones —
-> ITS Longley-Rice ITM, ML DF + covariance ellipse + GDOP + EKF, TDOA/FDOA, real SGP4, ITU-R
-> P.533-style HF, per-pixel WorldCover clutter, measured-pattern import, CoT-over-TLS. See
-> [`docs/AUTHORITATIVE_v2.md`](AUTHORITATIVE_v2.md).
+> **Note.** This document describes the original v1.x build plan. The current
+> codebase replaces the *indicative* propagation/geolocation implementations with
+> reference-grade ones — ITS Longley-Rice ITM, ML DF + covariance ellipse + GDOP +
+> EKF, TDOA/FDOA, real SGP4, ITU-R P.533-style HF, per-pixel WorldCover clutter,
+> measured-pattern import, CoT-over-TLS. Module-by-module breakdown:
+> [`docs/Ares.md`](Ares.md).
 
 > **What this is.** `Ares` is an RF-propagation/geolocation platform whose purpose is to ship four things on top of the current product:
 >

@@ -244,7 +244,9 @@ export function useUserLayers() {
       },
       onEachFeature: (feature, lyr) => {
         const p = feature.properties || {}
-        lyr.on('click', () => { selectedRef.current = { kind: 'layer', id } })   // click-to-select (Delete-key removes it)
+        // Click-to-select a single sub-feature (Delete removes just this pin/line/polygon, not the
+        // whole KMZ). To remove the entire imported layer, use the Layer Manager panel.
+        lyr.on('click', () => { selectedRef.current = { kind: 'feature', layerId: id, sublayer: lyr } })
         const ug = p.uas_glx || p.rid_glx
         if (ug) {
           const tip = String(p.serial || p.call_sign || ({ drone: 'UAS', platform: 'UAS', operator: 'operator', home: 'home', frame_center: 'frame centre', footprint: 'footprint', area: 'op. area', los: 'sensor LOS', platform_track: 'track' }[ug] || ug))
@@ -511,8 +513,17 @@ export function useUserLayers() {
     selectedRef.current = null
     if (s.kind === 'drawn') { drawCtrlRef.current?.removeFeature(s.id); return 'drawn' }
     if (s.kind === 'layer') { removeLayer(s.id); return 'layer' }
+    if (s.kind === 'feature') {
+      const entry = layersRef.current.get(s.layerId)
+      try { entry?.leafletLayer?.removeLayer?.(s.sublayer) } catch {}
+      if (entry?.meta && typeof entry.meta.featureCount === 'number') {
+        entry.meta.featureCount = Math.max(0, entry.meta.featureCount - 1)
+      }
+      refreshLayers()
+      return 'feature'
+    }
     return null
-  }, [removeLayer])
+  }, [removeLayer, refreshLayers])
 
   // ── Sample terrain at lat/lon — checks all loaded grids ────────────────
   const sampleTerrain = useCallback((lat, lon) => {

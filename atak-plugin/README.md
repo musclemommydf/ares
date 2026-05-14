@@ -1,62 +1,78 @@
-# ARES-ATAK — ATAK-CIV plugin (skeleton)
+# ARES-ATAK — ATAK-CIV plugin
 
 ATAK plugin that turns an [Ares](../README.md) server into the propagation /
 geolocation backend for ATAK — the open-source counterpart to CloudRF's
-SOOTHSAYER ATAK plugin, plus Ares-exclusive DF/geolocation, MANET, interference
+SOOTHSAYER plugin, plus Ares-exclusive DF/geolocation, MANET, interference
 and HF/space-weather tooling. See [`../docs/BUILD_PLAN.md`](../docs/BUILD_PLAN.md)
-Workstream C for the full plan; this directory is the **P0 module skeleton**.
+Workstream C for the full feature plan.
 
-> **Status: SDK-blocked.** The Ares server, web/desktop globe, deployment, and
-> ops surfaces are feature-complete (see `../docs/BUILD_PLAN.md`). The plugin's
-> non-SDK code is also in place: REST + WebSocket client, DTOs, settings store,
-> Co-Opt manager (adopt-callsign trigger loop), DF manager (`/geolocate/fix`),
-> coverage-overlay renderer, Gradle module against ATAK-CIV SDK 5.x, plugin
-> descriptor / lifecycle / map component / toolbar entry / dropdown receiver.
->
-> What's still open here **needs the tak.gov SDK + publisher accounts** and
-> cannot be finished without them:
->   1. The real `com.atakmap.*` / `transapps.*` glue (`TODO(...)` in the Kotlin):
->      dropdown UI inflation, `MapItem` overlay creation from the coverage
->      renderer, radial-menu items (Edit RF, Add LoB, Adopt callsign), CoT
->      publish/subscribe (GPS feed → Co-Opt, suspected-emitter marker → team),
->      and the KMZ import path.
->   2. `./gradlew assembleCivDebug` actually building — the ATAK API jar (`main.jar`)
->      must be wired in per the SDK's instructions (see below).
->   3. CI matrix per supported ATAK SDK line (5.3 / 5.4 / 5.5) — SOOTHSAYER ships
->      ~5 concurrent APKs; budget the same.
->   4. tak.gov (TAK Product Center) + Google Play signing & publication.
+## Status
+
+Real SDK wiring is in place: lifecycle (`AresPlugin : AbstractPlugin`),
+toolbar entry (`AresPluginTool : AbstractPluginTool`), map component
+(`AresMapComponent : DropDownMapComponent`), dropdown receiver
+(`AresDropDownReceiver : DropDownReceiver`), coverage overlay renderer
+(emits real `Marker` / `MapGroup` items), Co-Opt manager (live coverage
+driven by ATAK's `MapView` positions), DF manager (publishes
+suspected-emitter CoT to the team via `CommsMapComponent`), `AresApiClient`
+(every route the plugin uses already exists in the backend). The skeleton's
+`TODO(...)` markers are gone.
+
+What's not done here:
+- **Build verification** — not compiled in this dev environment (no JDK / Android
+  SDK / Android Studio installed). The next step is to open the project on a
+  machine with Android Studio Dolphin+ and `./gradlew assembleCivDebug`.
+- **CoT receive subscription** — Co-Opt polls `MapView` positions instead of
+  subscribing to CoT events. That's deliberate (the refresh triggers are time
+  AND distance, so a CoT-driven loop has to dedupe back to the same conditions),
+  but if you want sensor-pushed updates a `CotServiceRemote.CotEventListener`
+  hook lands in `AresMapComponent.onCreate`.
+- **Radial-menu items** — "Edit RF" / "Add LoB from here" — the plumbing is
+  there (`AresDropDownReceiver.runCoverageRaw`, `DfManager.addLoB`), but no
+  `MenuMapAdapter` entries yet.
+- **CI matrix** — SOOTHSAYER ships one APK per supported ATAK SDK line
+  (~5.3 / 5.4 / 5.5). Budget the same.
 
 ## Prerequisites
 
-1. **ATAK-CIV SDK** — download from <https://tak.gov> (a free account is enough;
-   the SDK is no longer on GitHub). You need `main.jar` (the ATAK API) and the
-   `atak-gradle-plugin`. Place / configure per the SDK's `README`:
-   - put `main.jar` where `app/build.gradle` expects it (see the `TODO` there), and
-   - set `takRepoUrl` / `takRepoUser` / `takRepoPassword` (or the local-jar path)
-     in your `local.properties` — **never commit credentials**.
-2. **Android Studio** + Android SDK (compileSdk per the ATAK SDK you target).
-3. A signing keystore. The debug keystore works for sideloading; release builds
-   for tak.gov / Google Play must be submitted for signing by the TAK Product
-   Center (as SOOTHSAYER's plugin is — TAK PC + Google Play signed).
+1. **JDK 11 (Adoptium)** — `apt install temurin-11-jdk` or via SDKMAN. *Do not
+   use Oracle JDK* (the SDK README is explicit about this).
+2. **Android Studio Dolphin or later** — provides the Android SDK + emulator.
+   Set `sdk.dir` in `local.properties` (Android Studio fills this in on
+   project import).
+3. **ATAK-CIV SDK** — download `atak-mil-mastersdk.zip` (or `atak-civ-sdk.zip`)
+   from <https://tak.gov> (free account). Unzip it somewhere stable; you'll
+   point `local.properties` at the unzipped directory below.
+4. **Signing keystore** — sideload uses the Android debug keystore by default.
+   Release builds for tak.gov / Google Play must be submitted unsigned to the
+   TAK Product Center for signing (SOOTHSAYER follows this path).
 
-## Build (once the SDK is in place)
+## First-time setup
 
 ```bash
 cd atak-plugin
-./gradlew assembleCivDebug          # sideload-able APK
-adb install -r app/build/outputs/apk/civ/debug/*.apk
+cp local.properties.example local.properties
+$EDITOR local.properties     # set sdk.dir and takdev.plugin
 ```
 
-Then in ATAK: **⋮ → Plugins** (jigsaw icon) → enable **ARES**. Open the ARES tool
-from the toolbar, set the server URL (`http://<ares-box>:8000` or your cloud
-instance) + credentials in **Settings**.
+`takdev.plugin` should be an absolute path to the unzipped SDK directory
+(`/home/you/atak-sdk/atak-mil-master`), the one containing `main.jar` and
+`atak-gradle-takdev.jar`. The takdev gradle plugin auto-discovers them.
 
-## ATAK version coupling
+## Build & install
 
-Plugins are tightly bound to the ATAK API version. Target the current SDK
-(≈5.5, Jetpack Compose UI available) on `main`; maintain a `legacy-sdk` branch
-with XML UI for 5.3/5.4. CI builds one APK per supported line. (SOOTHSAYER ships
-~5 concurrent APKs — budget for the same.)
+```bash
+./gradlew assembleCivDebug
+adb install -r app/build/outputs/apk/civ/debug/app-civ-debug.apk
+```
+
+Then in ATAK on the device/emulator: **⋮ → Plugins** (jigsaw icon) → enable
+**ARES**, then tap the ARES tool in the toolbar. Set your Ares server URL +
+credentials in the pane that opens (Settings section at the top).
+
+For iterative development from Android Studio: select the **civDebug** build
+variant (Build → Select Build Variant), then the `Run` button compiles and
+installs the APK while ATAK is running and prompts you to reload the plugin.
 
 ## Layout
 
@@ -67,24 +83,68 @@ atak-plugin/
     ├── build.gradle / proguard-rules.pro
     └── src/main/
         ├── AndroidManifest.xml
-        ├── assets/plugin.xml                 ATAK plugin descriptor (Lifecycle + Tool)
+        ├── assets/plugin.xml                 — IPlugin extension declaration
         ├── res/values/strings.xml
-        ├── res/layout/ares_main.xml          dropdown-pane layout (replaceable by Compose on SDK 5.5+)
+        ├── res/layout/ares_main.xml          — dropdown pane layout
+        ├── res/drawable/ic_ares.xml          — toolbar icon (vector)
         └── java/com/ares/atak/plugin/
-            ├── AresPluginLifecycle.kt         transapps Lifecycle entry point
-            ├── AresMapComponent.kt            AbstractMapComponent — registers receivers / overlays / radial items
-            ├── AresPluginTool.kt              toolbar button → SHOW_ARES intent
-            ├── AresDropDownReceiver.kt        the right-side pane controller (connection, templates, coverage, Co-Opt, DF)
-            ├── SettingsStore.kt               persisted server URL / token / Co-Opt policy / layer toggles
-            ├── CoverageOverlayRenderer.kt     coverage GeoJSON → ATAK overlay (vector) | KMZ import (raster)
-            ├── CoOptManager.kt                "Co-Opt": adopt a callsign → re-run coverage on time/distance triggers
-            ├── DfManager.kt                   DF / geolocation: collect LoBs → /geolocate/fix → suspected-emitter CoT
+            ├── AresPlugin.kt                  — IPlugin entry, wires tool + component
+            ├── AresPluginTool.kt              — toolbar item → SHOW_ARES intent
+            ├── AresMapComponent.kt            — DropDownMapComponent, registers receiver / overlay group
+            ├── AresDropDownReceiver.kt        — right-pane controller (login + run coverage + tabs)
+            ├── SettingsStore.kt               — SharedPreferences-backed config
+            ├── CoverageOverlayRenderer.kt     — coverage GeoJSON → ATAK Markers in a MapGroup
+            ├── CoOptManager.kt                — adopt callsign → re-run coverage on time/distance triggers
+            ├── DfManager.kt                   — LoBs → /geolocate/fix → suspected-emitter Marker + CoT publish
             └── net/
-                ├── AresApiClient.kt           REST + WS client (token auth, self-signed certs, /ws/simulate progress)
-                └── AresModels.kt              request/response DTOs (auth, server, packs, coverage, p2p, manet, geo, templates)
+                ├── AresApiClient.kt           — REST + WS client (token auth, self-signed certs, /ws/simulate)
+                └── AresModels.kt              — kotlinx-serialization DTOs (auth, packs, coverage, p2p, manet, geo, templates)
 ```
 
-### Skeleton status (what's modelled vs. wired)
-- **Modelled (Kotlin compiles in principle, logic present):** API client surface, DTOs, settings persistence, Co-Opt trigger loop, DF solve flow, coverage-response summarisation.
-- **Stubbed (needs the ATAK-CIV SDK):** everything touching `com.atakmap.android.maps.*` / `com.atakmap.comms.*` / `com.atakmap.android.dropdown.*` / `transapps.*` — dropdown UI inflation, map-overlay `MapItem` creation, radial-menu items, CoT publish/subscribe (the GPS feed for Co-Opt, the suspected-emitter marker for DF), KMZ import. Marked with `TODO(...)`.
-- **Build:** still does not build until the tak.gov SDK is configured (see Prerequisites).
+## ATAK API version coupling
+
+ATAK plugins are tightly bound to the ATAK API version. `takdev` extracts the
+matching `plugin-api` string from your `main.jar` and injects it into the
+manifest at build time, so you don't manage it manually — just keep
+`takdev.plugin` pointing at the SDK for the ATAK version you're targeting.
+
+Different SDK lines → different `civ-X.Y` build flavors / output paths. The
+default flavor here is `civ` (sideloadable). For mil/release builds, submit
+the unsigned `civRelease` APK to the TAK Product Center.
+
+## Backend contract (Ares server)
+
+The plugin talks to the Ares server over REST + a single WebSocket. Every
+endpoint is already implemented in `backend/app/api/`:
+
+| Plugin call                              | Backend route                                              |
+|------------------------------------------|------------------------------------------------------------|
+| `login(user, pass)`                      | `POST /api/v1/auth/login`                                  |
+| `serverInfo()`                           | `GET  /api/v1/server/info`                                 |
+| `listPacks()` / `downloadPack` / `packJob` | `/api/v1/packs[/download][/jobs/{id}]`                   |
+| `listTemplates()` / template CRUD        | `/api/v1/atak/templates[/{id}]`                            |
+| `templateCoverageRequest(id, lat, lon)`  | `POST /api/v1/atak/templates/{id}/coverage_request?lat=&lon=` |
+| `coverage(req)` / `p2p` / `manet`        | `POST /api/v1/simulate/{coverage,p2p,manet}`               |
+| `geolocateFix(req)`                      | `POST /api/v1/geolocate/fix`                               |
+| `lobRangeEstimate(lob)`                  | `POST /api/v1/lob/range_estimate`                          |
+| `exportKmz(geojson, name, minDbm)`       | `POST /api/v1/atak/export/kmz` → KMZ bytes                 |
+| `openSimulateProgress(onEvent)`          | `WS   /api/v1/ws/simulate`                                 |
+
+When the server has `ARES_AUTH=false` (the default for dev), `/auth/login`
+returns a long-lived synthetic token so the plugin's always-log-in flow keeps
+working without configuring users.
+
+## Troubleshooting
+
+- **`Could not resolve :atak-gradle-takdev:`** — check that `local.properties`
+  has `takdev.plugin=<absolute path>` and that the path contains
+  `atak-gradle-takdev.jar`. The path is read from `local.properties` at
+  configure time; `./gradlew --refresh-dependencies` after edits.
+- **`PluginContextProvider unavailable`** — the host ATAK is too old (need 5.x).
+  Update ATAK on the device.
+- **Plugin loads but the toolbar icon is missing** — verify `ic_ares.xml` built;
+  release builds with proguard may strip it if you've customised the proguard
+  rules — keep `-keep class com.ares.atak.plugin.**` if you do.
+- **`No suitable certificate` against an Ares dev server** — tick
+  "Allow self-signed cert" in the pane's Settings section, or front the server
+  with Caddy / nginx + a real Let's Encrypt cert.

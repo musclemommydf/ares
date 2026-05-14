@@ -1,19 +1,19 @@
-# Ares — v2.0 ("authoritative")
+# Ares
 
 Terrain-based RF propagation & geolocation platform with GPU acceleration. Rivals
 and surpasses CloudRF, SPLAT!, RadioMobile, and Wireless InSite.
 
-> **v2.0 — the "authoritative" rewrite.** The propagation and geolocation cores were
-> upgraded from *indicative* to *reference-grade*: a faithful port of the **ITS Longley-Rice
-> (ITM)** model (the SPLAT!/Radio Mobile/FCC algorithm, with full 7-climate variability);
-> **phase-interferometry / MUSIC / Capon array direction-finding** (ULA/UCA/arbitrary geometry,
-> ambiguity-resolved, with CRLB σ); a **maximum-likelihood DF fix** with a covariance-derived
-> (geometry-correct) error ellipse, **GDOP**, and an **EKF emitter track**; **TDOA/FDOA
-> multilateration**; a real **SGP4** (the
-> `sgp4` package, or a vendored faithful near-earth SGP4); an **ITU-R P.533-style HF** circuit
-> model; **per-pixel WorldCover clutter** in the path; **measured antenna-pattern import**
-> (NSMA/Planet MSI, NEC-2); and **CoT over mutual-TLS** to a TAK Server. See
-> [`docs/AUTHORITATIVE_v2.md`](docs/AUTHORITATIVE_v2.md) and run `cd backend && python -m tests.test_authoritative`.
+> Reference-grade physics: a faithful port of the **ITS Longley-Rice (ITM)** model
+> (the SPLAT!/Radio Mobile/FCC algorithm, with full 7-climate variability);
+> **phase-interferometry / MUSIC / Capon array direction-finding** (ULA/UCA/arbitrary
+> geometry, ambiguity-resolved, with CRLB σ); a **maximum-likelihood DF fix** with a
+> covariance-derived (geometry-correct) error ellipse, **GDOP**, and an **EKF emitter
+> track**; **TDOA/FDOA multilateration**; a real **SGP4** (the `sgp4` package, or a
+> vendored faithful near-earth SGP4); an **ITU-R P.533-style HF** circuit model;
+> **per-pixel WorldCover clutter** in the path; **measured antenna-pattern import**
+> (NSMA/Planet MSI, NEC-2); and **CoT over mutual-TLS** to a TAK Server. Module-by-
+> module breakdown: [`docs/Ares.md`](docs/Ares.md). Run the validation harness:
+> `cd backend && python -m tests.test_authoritative`.
 
 > **This is the `Ares` branch** — adds: (1) **ARES-ATAK**, an
 > open-source ATAK-CIV plugin matching the CloudRF SOOTHSAYER plugin and adding Ares

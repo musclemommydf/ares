@@ -25,6 +25,9 @@ from app.api.atak_routes import router as atak_router
 from app.api.geo_routes import router as geo_router
 from app.api.sdr_routes import router as sdr_router
 from app.api.df_routes import router as df_router
+from app.api.algorithms_routes import router as algorithms_router
+from app.api.targets_routes import router as targets_router
+from app.api.cellular_routes import router as cellular_router
 from app.api.chat_routes import router as chat_router
 from app.api.uas_routes import router as uas_router
 from app.core.auth import ensure_default_user
@@ -89,9 +92,24 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.debug("CoT listener unavailable", exc_info=True)
 
+    # Continuous track→CoT heartbeat: every active emitter track from the
+    # bundled trackers (Kalman + GM-PHD) is re-published on a heartbeat so
+    # connected ATAK clients see persistent tracks even between fresh fixes.
+    track_cot_task = None
+    try:
+        from app.core import track_cot_bridge
+        track_cot_task = asyncio.create_task(track_cot_bridge.run(interval_s=2.0))
+        log.info("track→CoT bridge started (2s heartbeat)")
+    except Exception:
+        log.debug("track→CoT bridge unavailable", exc_info=True)
+
     yield
 
     # Shutdown
+    if track_cot_task is not None:
+        track_cot_task.cancel()
+        try: await track_cot_task
+        except (asyncio.CancelledError, Exception): pass
     try:
         from app.core.sdr.mesh import peer_mesh
         await peer_mesh.stop()
@@ -176,6 +194,9 @@ app.include_router(atak_router, prefix="/api/v1")
 app.include_router(geo_router, prefix="/api/v1")
 app.include_router(sdr_router, prefix="/api/v1")
 app.include_router(df_router, prefix="/api/v1")
+app.include_router(algorithms_router, prefix="/api/v1")
+app.include_router(targets_router, prefix="/api/v1")
+app.include_router(cellular_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(uas_router, prefix="/api/v1")
 

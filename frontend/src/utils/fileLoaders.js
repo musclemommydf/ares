@@ -21,6 +21,7 @@ const GEO_EXTS = new Set(['geojson', 'json'])
 const KML_EXTS = new Set(['kml'])
 const KMZ_EXTS = new Set(['kmz'])
 const GPX_EXTS = new Set(['gpx'])
+const GPKG_EXTS = new Set(['gpkg'])
 const WORLDFILE_EXTS = new Set(['pgw', 'jgw', 'tfw', 'wld', 'gfw', 'bpw', 'sdw'])
 const DTED_EXTS = new Set(['dt0', 'dt1', 'dt2'])
 const HGT_EXTS = new Set(['hgt'])
@@ -78,6 +79,54 @@ function parseKMLText(text, name) {
   if (err) throw new Error('Invalid KML: ' + err.textContent.slice(0, 80))
   const geojson = kmlToGeoJSON(xml)
   return { kind: 'geojson', name, geojson, sourceFormat: 'kml' }
+}
+
+// GeoPackage (.gpkg) — SQLite-backed OGC format. Lib is heavy (~5 MB minified),
+// so we dynamic-import it; users who don't need .gpkg pay no bundle cost. If
+// the dep isn't installed, surface a one-line install command rather than a
+// cryptic module-not-found error.
+//
+// We bypass Rollup's static-import analysis via `new Function` so the bundler
+// doesn't try to resolve @ngageoint/geopackage at build time — if it isn't
+// installed, this file still bundles and the runtime catch block fires.
+const _dynImport = new Function('p', 'return import(p)')
+
+async function parseGeoPackage(file) {
+  let mod
+  try {
+    mod = await _dynImport('@ngageoint/geopackage')
+  } catch {
+    throw new Error(
+      'GeoPackage support requires @ngageoint/geopackage. Install it in frontend/ ' +
+      'with `npm install @ngageoint/geopackage` and reload.'
+    )
+  }
+  const { GeoPackageAPI } = mod
+  const buf = await readAsArrayBuffer(file)
+  const gp = await GeoPackageAPI.open(new Uint8Array(buf))
+  const out = []
+  try {
+    const featureTables = gp.getFeatureTables() || []
+    for (const tableName of featureTables) {
+      const features = []
+      const iter = gp.iterateGeoJSONFeatures(tableName)
+      for (const f of iter) features.push(f)
+      if (!features.length) continue
+      out.push({
+        kind: 'geojson',
+        name: `${file.name} :: ${tableName}`,
+        geojson: { type: 'FeatureCollection', features },
+        sourceFormat: 'gpkg',
+      })
+    }
+  } finally {
+    try { gp.close() } catch {}
+  }
+  if (!out.length) {
+    out.push({ kind: 'error', name: file.name,
+               message: 'GeoPackage opened but contains no feature tables' })
+  }
+  return out
 }
 
 function parseGPXText(text, name) {
@@ -577,6 +626,8 @@ export async function loadFiles(fileList) {
         out.push(...items)
       } else if (GPX_EXTS.has(ext)) {
         out.push(parseGPXText(await readAsText(f), f.name))
+      } else if (GPKG_EXTS.has(ext)) {
+        out.push(...(await parseGeoPackage(f)))
       } else if (GEO_EXTS.has(ext)) {
         out.push(await parseGeoJSON(f))
       } else if (DTED_EXTS.has(ext)) {
@@ -613,7 +664,7 @@ export async function loadFiles(fileList) {
 }
 
 export const SUPPORTED_EXTENSIONS = [
-  '.kml', '.kmz', '.geojson', '.json', '.gpx',
+  '.kml', '.kmz', '.geojson', '.json', '.gpx', '.gpkg',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg',
   '.tif', '.tiff',
   '.pgw', '.jgw', '.tfw', '.wld',

@@ -249,10 +249,47 @@ AUDIO_MODES = [
 ]
 _DECODER_PROGRAMS = sorted({d for m in AUDIO_MODES for d in m["decoders"] if d != "builtin"})
 
+# Logical name → list of binaries that count as "this decoder is installed".
+# Necessary because the packaged binary names don't always match the logical
+# decoder name (e.g. dump1090 ships as dump1090-fa or dump1090-mutability;
+# rtl_ais on some distros is rtl-ais; the m17 demod from mobilinkd installs
+# as m17-demod / m17-mod, not "m17-tools").
+_DECODER_ALIASES = {
+    "dsd-fme":     ["dsd-fme", "dsd_fme"],
+    "dsdplus":     ["dsdplus", "DSDPlus"],
+    "op25":        ["op25_rx", "op25"],          # boatbod/op25 ships op25_rx; "op25" is a launcher dir name on some distros
+    "sdrtrunk":    ["sdrtrunk"],                 # only the launcher symlink — not 'java' (false positive on every Linux)
+    "tetra-rx":    ["tetra-rx", "tetra_demod"],
+    "telive":      ["telive"],
+    "m17-tools":   ["m17-demod", "m17-mod", "m17-tools"],
+    "multimon-ng": ["multimon-ng"],
+    "acarsdec":    ["acarsdec"],
+    "rtl_ais":     ["rtl_ais", "rtl-ais"],
+    "AIS-catcher": ["AIS-catcher", "ais-catcher"],
+    "dump1090":    ["dump1090", "dump1090-fa", "dump1090-mutability"],
+    # Cellular decoders + WiFi/BLE capture tools (Targets-tab feeders)
+    "gr-gsm":      ["grgsm_livemon_headless", "grgsm_decode", "grgsm_capture"],
+    "lte-sniffer": ["LTESniffer", "lte-sniffer"],
+    "5g-sniffer":  ["5g_sniffer", "5GSniffer", "5g-sniffer"],    # spritelab/5GSniffer ships `5g_sniffer`
+    "srsran-ue":   ["srsue"],
+    "hcxdumptool": ["hcxdumptool"],
+    "airodump-ng": ["airodump-ng"],
+    "btmon":       ["btmon"],
+    "bluetoothctl":["bluetoothctl"],
+}
+
+
+def _decoder_present(logical: str) -> bool:
+    """True if any binary matching the logical decoder name is on PATH."""
+    cands = _DECODER_ALIASES.get(logical, [logical, logical.replace("-", "_")])
+    return any(shutil.which(c) for c in cands)
+
 
 def available_decoders() -> list[str]:
-    """Which external decoder programs are actually on the PATH right now."""
-    return [p for p in _DECODER_PROGRAMS if shutil.which(p) or shutil.which(p.replace("-", "_"))]
+    """Which external decoder programs are actually on the PATH right now —
+    matched via the alias table so 'dump1090' resolves to dump1090-fa /
+    dump1090-mutability, 'm17-tools' resolves to mobilinkd's m17-demod, etc."""
+    return [p for p in _DECODER_PROGRAMS if _decoder_present(p)]
 
 
 def audio_mode_info() -> dict:

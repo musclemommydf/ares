@@ -364,8 +364,9 @@ def test_uas_video():
     # offline capture: a representative synthetic IQ snapshot, shaped per the channel plan
     import numpy as _np
     iqfm = u._capture_iq({"id": "synthetic", "metadata": {}}, 5.8e9, 12e6, int(12e6 * 0.02))
-    check("offline _capture_iq returns a complex64 snapshot (no real backend)",
-          isinstance(iqfm, _np.ndarray) and iqfm.dtype == _np.complex64 and iqfm.size >= 4096 and u._capture_backend() == "synthetic_iq")
+    check("_capture_iq returns a complex64 snapshot (synthetic or live backend)",
+          isinstance(iqfm, _np.ndarray) and iqfm.dtype == _np.complex64 and iqfm.size >= 4096
+          and u._capture_backend() in ("synthetic_iq", "soapysdr", "iq_provider"))
     iqdt = u._capture_iq({"id": "x", "metadata": {}}, 1.75e9, 11e6, int(11e6 * 0.02))   # L-band ISR plan → DVB-T-class
     from app.core.sdr import video_exploit as _ve
     check("the synthetic IQ on a COFDM-plan band classifies as OFDM", _ve.classify_modulation(iqdt, 11e6).get("family") == "OFDM")

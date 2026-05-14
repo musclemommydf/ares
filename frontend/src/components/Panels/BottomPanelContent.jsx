@@ -9,6 +9,11 @@ import EmitterSummary from './EmitterSummary'
 import SavedLocations from './SavedLocations'
 import SpaceWxPanel from './SpaceWxPanel'
 import ErrorBoundary from '../Common/ErrorBoundary'
+import TrackHistoryPanel from '../Map/TrackHistoryPanel'
+import PassiveRadarPanel from '../Tools/PassiveRadarPanel'
+import EmitterAnalyticsPanel from './EmitterAnalyticsPanel'
+import AlgorithmsPanel from './AlgorithmsPanel'
+import TargetsPanel from './TargetsPanel'
 
 const COL = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
 const HIDDEN = { flex: 1, minHeight: 0, overflow: 'hidden' }
@@ -27,7 +32,8 @@ export default function BottomPanelContent({
   terrain,                                             // terrain tab
   ul,                                                  // video → "add to map"
   terrainGrid, terrainGridLoading, coverageGeoJSON, buildingGeoJSON,   // 3-D view
-  txActive, txLabel, extraTxList, lobs, lobGroups, onRemoveLoB, onEditLoB,   // emitter summary
+  txActive, txLabel, extraTxList, lobs, lobGroups, onRemoveLoB, onEditLoB, onSimulatePropagationFromFix,   // emitter summary
+  onSendAlgorithmFixToMap,                                                                              // algorithms tab
   savedLocations, onSavedFlyTo, onSavedRemove,         // saved locations
   tx, rx, propagation, spaceWeather,                   // shared
 }) {
@@ -60,9 +66,22 @@ export default function BottomPanelContent({
           waveType={propagation.wave_type}
         />
       )}
-      {active === 'df' && <div style={HIDDEN}><DfPanel /></div>}
+      {active === 'df' && <div style={HIDDEN}><DfPanel onSendAlgorithmFixToMap={onSendAlgorithmFixToMap} /></div>}
+      {active === 'algorithms' && (
+        <div style={HIDDEN}>
+          <AlgorithmsPanel onSendToMap={onSendAlgorithmFixToMap} />
+        </div>
+      )}
+      {active === 'targets' && (
+        <div style={HIDDEN}>
+          <TargetsPanel onSendToMap={onSendAlgorithmFixToMap} />
+        </div>
+      )}
+      {active === 'tracks' && <div style={SCROLL}><TrackHistoryPanel /></div>}
+      {active === 'passive_radar' && <div style={HIDDEN}><PassiveRadarPanel /></div>}
+      {active === 'activity' && <div style={HIDDEN}><EmitterAnalyticsPanel /></div>}
       {active === 'emitters' && (
-        <EmitterSummary txActive={txActive} txLabel={txLabel} tx={tx} extraTxList={extraTxList} lobs={lobs} lobGroups={lobGroups} onRemoveLoB={onRemoveLoB} onEditLoB={onEditLoB} />
+        <EmitterSummary txActive={txActive} txLabel={txLabel} tx={tx} extraTxList={extraTxList} lobs={lobs} lobGroups={lobGroups} onRemoveLoB={onRemoveLoB} onEditLoB={onEditLoB} onSimulatePropagationFromFix={onSimulatePropagationFromFix} />
       )}
       {active === 'video' && (
         <div style={HIDDEN}>

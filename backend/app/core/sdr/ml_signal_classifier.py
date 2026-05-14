@@ -126,7 +126,17 @@ def load_model(path: str):
         if hasattr(m, "eval"):
             m.eval()
         return ("torch", m)
-    raise ValueError(f"unrecognised model file (want .onnx / .pt / .pth / .ckpt): {p}")
+    if p.endswith(".tflite"):
+        # Lazy import — TFLite is optional; ARM-friendly path for embedded Ares nodes.
+        try:
+            import tflite_runtime.interpreter as tflite  # type: ignore
+            interp = tflite.Interpreter(model_path=p)
+        except Exception:
+            import tensorflow as tf  # type: ignore   # full TF as a fallback
+            interp = tf.lite.Interpreter(model_path=p)
+        interp.allocate_tensors()
+        return ("tflite", interp)
+    raise ValueError(f"unrecognised model file (want .onnx / .pt / .pth / .ckpt / .tflite): {p}")
 
 
 def _softmax(v: np.ndarray) -> np.ndarray:
@@ -159,6 +169,20 @@ class Classifier:
             with torch.no_grad():
                 y = m[1](torch.from_numpy(feat[None, :]).float())
             return y.detach().cpu().numpy().ravel()
+        if isinstance(m, tuple) and m[0] == "tflite":
+            interp = m[1]
+            in_det = interp.get_input_details()[0]
+            out_det = interp.get_output_details()[0]
+            # Tflite is picky about dtype + shape — coerce.
+            x = feat[None, :].astype(in_det.get("dtype", np.float32))
+            # Some models quantise the input; rescale if so.
+            scale, zp = in_det.get("quantization", (0.0, 0))
+            if scale and scale > 0:
+                x = (x / scale + zp).astype(in_det["dtype"])
+            interp.set_tensor(in_det["index"], x.reshape(in_det["shape"]))
+            interp.invoke()
+            out = interp.get_tensor(out_det["index"])
+            return np.asarray(out, dtype=np.float32).ravel()
         if callable(m):
             return np.asarray(m(feat)).ravel()
         raise TypeError("unsupported model object")
@@ -212,5 +236,7 @@ def status() -> dict:
         "default_classes": list(DEFAULT_CLASSES),
         "onnxruntime": _have("onnxruntime"),
         "torch": _have("torch"),
+        "tflite_runtime": _have("tflite_runtime"),
+        "tensorflow": _have("tensorflow"),
         "registered": uas_video.ML_CLASSIFIER is not None,
     }

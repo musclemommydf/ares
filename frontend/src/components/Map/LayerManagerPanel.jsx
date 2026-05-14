@@ -46,6 +46,32 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
     attribution: '', wmsLayers: '',
   })
   const sessionInputRef = useRef(null)
+  // Multi-select for bulk Show / Hide / Delete. Keys: layer.id or `drawn:${f.id}`.
+  const [selected, setSelected] = useState(() => new Set())
+  const toggleSelected = (key) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+  const clearSelection = () => setSelected(new Set())
+  const bulkSetVisible = (visible) => {
+    selected.forEach((key) => {
+      if (key.startsWith('drawn:')) return                  // drawn features have no per-feature visibility yet
+      ul.setLayerProperty(key, { visible })
+    })
+  }
+  const bulkDelete = () => {
+    const n = selected.size
+    if (!n) return
+    if (!confirm(`Delete ${n} selected item${n > 1 ? 's' : ''}?`)) return
+    selected.forEach((key) => {
+      if (key.startsWith('drawn:')) ul.removeDrawnFeature(key.slice(6))
+      else ul.removeLayer(key)
+    })
+    clearSelection()
+  }
 
   const groupedByZoom = useMemo(() => {
     // For imagery & tile sources, group by their visible zoom range
@@ -222,6 +248,28 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
         </div>
       )}
 
+      {/* ── Bulk-actions bar (only when items are selected) ─────────────── */}
+      {selected.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+          borderBottom: '1px solid #21262d', flexShrink: 0,
+          background: '#0d2438',
+        }}>
+          <span style={{ fontSize: 11, color: '#c9d1d9', fontWeight: 600 }}>
+            {selected.size} selected
+          </span>
+          <div style={{ flex: 1 }} />
+          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 10px' }}
+            onClick={() => bulkSetVisible(true)}>👁 Show</button>
+          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 10px' }}
+            onClick={() => bulkSetVisible(false)}>🚫 Hide</button>
+          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 10px', color: '#fca5a5' }}
+            onClick={bulkDelete}>🗑 Delete</button>
+          <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 6px', color: '#8b949e' }}
+            onClick={clearSelection}>✕</button>
+        </div>
+      )}
+
       {/* ── Filter chips ────────────────────────────────────────────────── */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
@@ -272,7 +320,7 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
                   Zoom {g.min}–{g.max} · {g.items.length} layer{g.items.length > 1 ? 's' : ''}
                 </div>
                 {g.items.filter(l => kindFilter.has(l.kind)).map(l => (
-                  <LayerRow key={l.id} layer={l} ul={ul} />
+                  <LayerRow key={l.id} layer={l} ul={ul} selected={selected.has(l.id)} onToggleSelect={() => toggleSelected(l.id)} />
                 ))}
               </div>
             ))}
@@ -283,7 +331,7 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
         {kindFilter.has('geojson') && filteredLayers.some(l => l.kind === 'geojson') && (
           <Section title={`Vector layers (${filteredLayers.filter(l => l.kind === 'geojson').length})`}>
             {filteredLayers.filter(l => l.kind === 'geojson').map(l =>
-              <LayerRow key={l.id} layer={l} ul={ul} />
+              <LayerRow key={l.id} layer={l} ul={ul} selected={selected.has(l.id)} onToggleSelect={() => toggleSelected(l.id)} />
             )}
           </Section>
         )}
@@ -292,7 +340,7 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
         {kindFilter.has('terrain') && filteredLayers.some(l => l.kind === 'terrain') && (
           <Section title={`Terrain grids (${filteredLayers.filter(l => l.kind === 'terrain').length})`}>
             {filteredLayers.filter(l => l.kind === 'terrain').map(l =>
-              <LayerRow key={l.id} layer={l} ul={ul} />
+              <LayerRow key={l.id} layer={l} ul={ul} selected={selected.has(l.id)} onToggleSelect={() => toggleSelected(l.id)} />
             )}
           </Section>
         )}
@@ -300,28 +348,37 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
         {/* Drawn features */}
         {showDrawings && ul.drawnFeatures.length > 0 && (
           <Section title={`Drawings (${ul.drawnFeatures.length})`}>
-            {ul.drawnFeatures.map(f => (
-              <div key={f.id} style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '6px 8px', borderBottom: '1px solid #161b22',
-              }}>
-                <span style={{
-                  fontSize: 9, color: '#a855f7', fontWeight: 700,
-                  background: '#2d1b3d', padding: '2px 6px', borderRadius: 4,
-                  minWidth: 60, textAlign: 'center',
-                }}>{f.kind}</span>
-                <button className="btn btn-ghost"
-                  style={{ flex: 1, textAlign: 'left', padding: '2px 6px', fontSize: 11,
-                           color: '#c9d1d9', overflow: 'hidden', whiteSpace: 'nowrap',
-                           textOverflow: 'ellipsis' }}
-                  onClick={() => ul.focusDrawnFeature(f.id)}>
-                  {f.meta?.name || f.id}
-                </button>
-                <button className="btn btn-ghost"
-                  style={{ padding: '2px 5px', fontSize: 11, color: '#fca5a5' }}
-                  onClick={() => ul.removeDrawnFeature(f.id)}>×</button>
-              </div>
-            ))}
+            {ul.drawnFeatures.map(f => {
+              const key = `drawn:${f.id}`
+              const isSelected = selected.has(key)
+              return (
+                <div key={f.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '6px 8px', borderBottom: '1px solid #161b22',
+                  background: isSelected ? '#0d2438' : 'transparent',
+                  borderRadius: isSelected ? 4 : 0,
+                }}>
+                  <input type="checkbox" checked={isSelected} onChange={() => toggleSelected(key)}
+                    title="Select for bulk action"
+                    style={{ cursor: 'pointer', accentColor: '#1f6feb' }} />
+                  <span style={{
+                    fontSize: 9, color: '#a855f7', fontWeight: 700,
+                    background: '#2d1b3d', padding: '2px 6px', borderRadius: 4,
+                    minWidth: 60, textAlign: 'center',
+                  }}>{f.kind}</span>
+                  <button className="btn btn-ghost"
+                    style={{ flex: 1, textAlign: 'left', padding: '2px 6px', fontSize: 11,
+                             color: '#c9d1d9', overflow: 'hidden', whiteSpace: 'nowrap',
+                             textOverflow: 'ellipsis' }}
+                    onClick={() => ul.focusDrawnFeature(f.id)}>
+                    {f.meta?.name || f.id}
+                  </button>
+                  <button className="btn btn-ghost"
+                    style={{ padding: '2px 5px', fontSize: 11, color: '#fca5a5' }}
+                    onClick={() => ul.removeDrawnFeature(f.id)}>×</button>
+                </div>
+              )
+            })}
           </Section>
         )}
       </div>
@@ -348,7 +405,7 @@ function Section({ title, children }) {
   )
 }
 
-function LayerRow({ layer, ul }) {
+function LayerRow({ layer, ul, selected = false, onToggleSelect }) {
   const [expanded, setExpanded] = useState(false)
   const color = KIND_COLORS[layer.kind] || '#8b949e'
   const sub = []
@@ -370,9 +427,14 @@ function LayerRow({ layer, ul }) {
       marginBottom: expanded ? 4 : 0,
       padding: expanded ? '4px 6px' : 0,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px',
+                    background: selected ? '#0d2438' : 'transparent', borderRadius: selected ? 4 : 0 }}>
+        <input type="checkbox" checked={selected} onChange={onToggleSelect}
+          title="Select for bulk action"
+          style={{ cursor: 'pointer', accentColor: '#1f6feb' }} />
         <input type="checkbox" checked={layer.visible}
           onChange={() => ul.setLayerProperty(layer.id, { visible: !layer.visible })}
+          title="Show on map"
           style={{ cursor: 'pointer' }} />
         <span style={{
           fontSize: 9, color, fontWeight: 700,

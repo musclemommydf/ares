@@ -1,18 +1,29 @@
 # ARES-ATAK plugin — copy to local.properties (which is git-ignored) and fill in.
 # DO NOT COMMIT real credentials.
 
-# Android SDK location (Android Studio sets this automatically)
-sdk.dir=/path/to/Android/sdk
+# Android SDK location (Android Studio sets this automatically when you import the project).
+sdk.dir=/home/YOUR_USER/Android/Sdk
 
-# --- ATAK-CIV SDK from tak.gov ---
-# Either point at the TAK maven repo (preferred), or drop main.jar / ATAKMapEngine.jar
-# under atak-plugin/sdk/ and reference them from app/build.gradle (compileOnly files(...)).
-takRepoUrl=https://artifacts.tak.gov/artifactory/atak-civ
-takRepoUser=YOUR_TAK_GOV_USER
-takRepoPassword=YOUR_TAK_GOV_TOKEN
+# ── ATAK-CIV SDK (from tak.gov) ─────────────────────────────────────────────
+# Easiest path: download atak-mil-mastersdk.zip from tak.gov, unzip it somewhere
+# stable, and point takdev.plugin at that directory. takdev picks up main.jar +
+# atak-gradle-takdev.jar from there automatically — no maven credentials required.
+takdev.plugin=/home/YOUR_USER/atak-sdk/atak-mil-master
 
-# --- signing (sideload uses the Android debug keystore by default) ---
-# takDebugKeyFile=~/.android/debug.keystore
-# takDebugKeyFilePassword=android
-# takDebugKeyAlias=androiddebugkey
-# takDebugKeyPassword=android
+# ── (alternative) tak.gov artifactory ───────────────────────────────────────
+# If you'd rather pull the SDK from tak.gov's maven mirror instead of using a
+# local unzip, uncomment these and skip takdev.plugin above. takdev will fetch
+# main.jar via the takrepo credentials.
+#takrepo.url=https://artifacts.tak.gov/artifactory/maven
+#takrepo.user=YOUR_TAK_GOV_USER
+#takrepo.password=YOUR_TAK_GOV_TOKEN
+
+# ── signing ─────────────────────────────────────────────────────────────────
+# Sideload (`assembleCivDebug`) uses the Android debug keystore by default. For
+# release builds intended for tak.gov / Google Play, submit the unsigned APK to
+# the TAK Product Center for signing (as SOOTHSAYER does); do not commit your
+# release keystore here.
+#takDebugKeyFile=/home/YOUR_USER/.android/debug.keystore
+#takDebugKeyFilePassword=android
+#takDebugKeyAlias=androiddebugkey
+#takDebugKeyPassword=android

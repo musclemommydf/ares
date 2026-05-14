@@ -16,8 +16,11 @@ import textwrap
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Rectangle, Circle, Ellipse
+
+SCREENSHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
 
 # ── palette ──────────────────────────────────────────────────────────────────
 NAVY = "#0e2a47"
@@ -29,7 +32,7 @@ AMBER = "#d9830f"
 PAPER = "#ffffff"
 PANEL = "#f3f6f9"
 LINE = "#d6dde4"
-VERSION = "Ares v2.0"
+VERSION = "Ares v5.2 (alpha)"
 
 plt.rcParams["font.family"] = "DejaVu Sans"
 
@@ -118,6 +121,44 @@ def _section(ax, x, y, label, x_right=0.94, landscape=True):
     return y - 0.008
 
 
+def _screenshot(ax, key, x, y, w, h, *, caption=None, fallback_text=None):
+    """Embed docs/screenshots/<key>.png into the axes within the rectangle
+    (x, y, w, h). If the file is missing, draws a labelled placeholder so the
+    PDF still renders. Returns True if a real screenshot was embedded.
+
+    Caption (if given) is drawn under the image in muted text.
+    """
+    path = os.path.join(SCREENSHOT_DIR, f"{key}.png")
+    drew_image = False
+    if os.path.isfile(path):
+        try:
+            img = mpimg.imread(path)
+            # axes-fraction → display so we can use ax.imshow
+            ax.imshow(img, extent=[x, x + w, y, y + h], aspect="auto",
+                      interpolation="hanning", zorder=4,
+                      transform=ax.transAxes)
+            ax.add_patch(Rectangle((x, y), w, h, fc="none", ec=LINE, lw=0.8, zorder=5))
+            drew_image = True
+        except Exception as e:
+            print(f"[!] couldn't embed {path}: {e}")
+    if not drew_image:
+        ax.add_patch(Rectangle((x, y), w, h, fc=PANEL, ec=LINE, lw=1.0, zorder=3))
+        ax.add_patch(Rectangle((x, y + h - 0.005), w, 0.005, color=AMBER, zorder=4))
+        _t(ax, x + w / 2, y + h / 2 + 0.012,
+           fallback_text or f"⊕ screenshot: {key}",
+           size=10, color=NAVY, weight="bold", ha="center")
+        _t(ax, x + w / 2, y + h / 2 - 0.008,
+           "drop a PNG at docs/screenshots/" + key + ".png",
+           size=7.5, color=MUTE, ha="center")
+        _t(ax, x + w / 2, y + h / 2 - 0.022,
+           "or run  python docs/capture_screenshots.py",
+           size=7.5, color=MUTE, ha="center")
+    if caption:
+        _t(ax, x + w / 2, y - 0.018, caption,
+           size=8, color=MUTE, ha="center", weight="normal")
+    return drew_image
+
+
 def _logo_mark(ax, cx, cy, r, ring="white"):
     """A stylised 'Ares' mark — a DF/compass dial with bearing rays, an error ellipse, a fix dot."""
     import numpy as np
@@ -158,13 +199,13 @@ def build_flyer(path):
         chips = [
             ("Terrain RF propagation", "ITS Longley-Rice (ITM) + ~12 models, raster"),
             ("Passive geolocation / DF", "ML fix + error ellipse · TDOA/FDOA · array MUSIC"),
-            ("SDR console & spectrum", "spectrum + waterfall · audio-decode bridge"),
-            ("3-D globe", "CesiumJS — RF on real terrain & buildings"),
-            ("Offline-first", "data packs (terrain/imagery/buildings) + auto-fetch"),
-            ("ATAK / TAK", "CoT out: LoBs · fixes · GeoChat — UDP/mcast/TCP/TLS"),
-            ("Distributed sensing", "MANET peer fusion, mesh-signed · group chat"),
-            ("HF & satellites", "ITU-R-style HF circuits · real SGP4 visibility"),
-            ("Self-hostable", "Jetson · laptop · Raspberry Pi 5 · cloud"),
+            ("Single-channel DF",       "RSS · Doppler-CPA · synthetic aperture · phase int."),
+            ("Auto PTT identification", "DMR/P25/TETRA/NXDN/D-STAR/YSF/M17 + auto-decoder"),
+            ("UAS / FPV video decode",  "NTSC/PAL FM video · colormaps · snapshot/record"),
+            ("3-D globe",               "CesiumJS — RF on real terrain & buildings"),
+            ("ATAK / TAK",              "CoT out: LoBs · fixes · GeoChat — UDP/mcast/TCP/TLS"),
+            ("Distributed sensing",     "MANET peer fusion, mesh-signed · group chat"),
+            ("Self-hostable, offline",  "Kali-ready installer · Jetson · laptop · Pi · cloud"),
         ]
         cw, ch, gx, gy, x0, y0 = 0.285, 0.046, 0.012, 0.009, 0.07, 0.565
         for i, (h_, b_) in enumerate(chips):
@@ -182,7 +223,7 @@ def build_flyer(path):
         gs1 = [
             ("Install — ", "./install.sh  (Linux/macOS) · install.bat  (Windows) · air-gapped: ./install.sh --offline-bundle <dir>"),
             ("Run — ", "./start-backend.sh  (server :8000) · ./start-web.sh  (browser UI :3000) · ./start-desktop.sh  (Electron) · docker compose up -d"),
-            ("Explore — ", "http://localhost:8000/docs  (interactive API) · docs/AUTHORITATIVE_v2.md · docs/DEPLOYMENT.md · cd backend && python -m tests.test_authoritative"),
+            ("Explore — ", "http://localhost:8000/docs  (interactive API) · docs/Ares.md · docs/DEPLOYMENT.md · cd backend && python -m tests.test_authoritative"),
         ]
         yy = 0.262
         for h_, b_ in gs1:
@@ -316,12 +357,12 @@ def build_flyer(path):
             ("Raspberry Pi 5 — ", "a 'links-only' node: P2P link mode, RF-link / Co-Opt, DF, HF, space weather."),
             ("Cloud VM — ", "a shared server; leave ARES_AUTH on (the default whenever it isn't bound to loopback)."),
         ], LS, x_right=0.945, size=8.8, lh=0.0165, gap=0.006)
-        # authoritative-and-honest box
+        # reference-grade + honest box
         _round(ax, 0.05, 0.045, 0.90, 0.235, NAVY)
-        _t(ax, 0.075, 0.270, "Authoritative — and honest about the rest", size=12.5, color="white", weight="bold")
+        _t(ax, 0.075, 0.270, "Ares — and honest about the rest", size=12.5, color="white", weight="bold")
         ax.add_patch(Rectangle((0.075, 0.243), 0.30, 0.0025, color=TEAL, zorder=3))
         yy = _para(ax, 0.075, 0.230,
-                   "Authoritative:  the ITS Longley-Rice ITM port (lrprop / avar / adiff / ascat / alos, 7 climate zones, "
+                   "Reference-grade:  the ITS Longley-Rice ITM port (lrprop / avar / adiff / ascat / alos, 7 climate zones, "
                    "NTIA Report 82-100); the ML / Stansfield triangulation + covariance error ellipse; TDOA/FDOA (Chan); "
                    "multi-baseline phase interferometry + CRLB; MUSIC / Capon / Bartlett; SGP4; the ITU-R-style HF circuit; "
                    "CoT / GeoChat I/O including mutual-TLS; the HMAC-signed MANET fusion.",
@@ -330,14 +371,14 @@ def build_flyer(path):
               "Still approximate / pending hardware:  the HF foF2 is a parameterised model, not the CCIR/URSI coefficient maps; "
               "ITM isn't yet bit-validated against NTIA's C reference; hardware-in-the-loop (KrakenSDR → fix → CoT) and a live "
               "multi-node mesh are code-exercised but untested on real RF; the ATAK plugin is SDK-blocked for build/signing. "
-              "All of it is spelled out in  docs/AUTHORITATIVE_v2.md.",
+              "All of it is spelled out in  docs/Ares.md.",
               0.945, LS, size=8.4, color="#9fb6cc", lh=0.0185)
         _footer(ax, "Flyer", 4, 4); pdf.savefig(fig); plt.close(fig)
     print("wrote", path)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# TUTORIAL  (landscape Letter, 14 slides)
+# TUTORIAL  (landscape Letter, slides — exact count is len(SL)+1)
 # ════════════════════════════════════════════════════════════════════════════
 LS_T = True
 
@@ -411,11 +452,14 @@ def build_tutorial(path):
         _bullets(ax, 0.055, top - 0.022, [
             ("2-D ⇄ 3-D.  ", "Leaflet 2-D map by default; the ⚙ menu (top-right of the map) or the bottom-panel '3-D View' tab switches to the CesiumJS globe. Camera, layers, drawn features, KMZ and your GPS marker carry across — KMZ added in 2-D persists in 3-D and back."),
             ("Layers.  ", "Drag-and-drop KML / KMZ / GeoJSON / GPX / GeoTIFF / DTED / images onto the map → they appear in the Layers tab (toggle, recolour, remove) and on both views. The import button on the globe imports the same way."),
-            ("Drawing tools.  ", "The ✎ palette — points, lines, polygons, rectangles, circles, ellipses, freehand, range rings, fans, range-bearing, geofences, MIL / NATO symbology. (Its z-index was fixed so the bottom panel no longer hides it.)"),
+            ("Drawing tools.  ", "The ✎ palette — points, lines, polygons, rectangles, circles, ellipses, freehand, range rings, fans, range-bearing, geofences, MIL / NATO symbology."),
             ("Ruler & search.  ", "The ruler tool gives two-click distance/bearing; the search box does place search (Nominatim); ⊕ re-centres on the transmitter."),
-            ("Settings (⚙).  ", "Basemap, distance/altitude units, coordinate system, compass rose, brightness, the 3-D coverage render mode (heatmap vs point-cloud), feature colours — shared by both views."),
-            ("On the map you'll see.  ", "the TX (cyan) and RX (yellow) markers, coverage heatmaps, LoB fans, error ellipses and suspected-emitter markers, antenna lobes, KMZ overlays, and a cyan '▲ you' GPS marker."),
-        ], LS_T, size=10.5, lh=0.025, gap=0.014)
+            ("Origin badges on emitter markers.  ", "Algorithm-tab fixes appear as a rotated-square Σ marker; DF-head fixes get a 'DF' badge; manual TXs stay as the labelled circle — so you can tell at a glance where a fix came from."),
+            ("On the map you'll see.  ", "the TX (cyan) and RX (yellow) markers, coverage heatmaps, LoB fans, error ellipses, antenna lobes, KMZ overlays, and a cyan '▲ you' GPS marker."),
+        ], LS_T, x_right=0.51, size=9.5, lh=0.022, gap=0.011)
+        _screenshot(ax, "map_overview", 0.53, 0.13, 0.42, top - 0.16,
+                     caption="2-D Leaflet view with the bottom-panel tabs",
+                     fallback_text="Main map")
     SL.append(("The map — 2-D Leaflet ⇄ 3-D CesiumJS globe", "Tutorial · 4", s_map))
 
     # 5 — coverage
@@ -434,20 +478,26 @@ def build_tutorial(path):
         _bullets(ax, 0.055, top - 0.022, [
             ("Set the receiver.  ", "Switch the Coverage tab to 'P2P' (point-to-point); click the map to drop the RX, set its height (and altitude for an airborne RX). The TX/RX pair shows a dashed link line, a translucent first-Fresnel ellipsoid along it on the globe, and an antenna lobe at the TX."),
             ("Run the link.  ", "Run computes the full link budget along the real terrain profile — path loss, received signal vs. sensitivity, fade margin, propagation mode (LOS / diffraction / troposcatter) and the radio horizons."),
-            ("Terrain profile & obstruction.  ", "The 'Terrain Profile' bottom tab shows the path's elevation cross-section with the line-of-sight, the Fresnel zone, and where (if anywhere) terrain blocks it. On the globe a red marker is dropped on the blocking ridge with the clearance deficit (a 4/3-earth check)."),
-            ("Note on the engine.  ", "P2P uses the same ITS Longley-Rice port as coverage — the model SPLAT! / Radio Mobile / the FCC use — not a simplified approximation. The LOS↔transhorizon mode label keys on the terrain take-off angles, so a deep mid-path ridge is correctly labelled 'diffraction'."),
-        ], LS_T, size=10.5, lh=0.025, gap=0.016)
+            ("Terrain profile & obstruction.  ", "The 'Terrain Profile' bottom tab shows the path's elevation cross-section with the line-of-sight, the Fresnel zone, and where (if anywhere) terrain blocks it."),
+            ("Same engine as coverage.  ", "P2P uses the same ITS Longley-Rice port — the model SPLAT! / Radio Mobile / the FCC use — not an approximation. LOS / diffraction / troposcatter labels key off the actual take-off angles."),
+        ], LS_T, x_right=0.51, size=9.6, lh=0.0225, gap=0.012)
+        _screenshot(ax, "tab_terrain", 0.53, 0.13, 0.42, top - 0.16,
+                     caption="Terrain Profile tab — cross-section + Fresnel zone",
+                     fallback_text="Terrain Profile")
     SL.append(("Point-to-point links & terrain profiles", "Tutorial · 6", s_p2p))
 
     # 7 — DF / geolocation
     def s_df(ax, top):
         _bullets(ax, 0.055, top - 0.022, [
             ("Switch to Geolocation mode.  ", "Header → mode → Geolocation. The map gets a DF workflow; the 'Emitter Summary' bottom tab tracks the picture."),
-            ("Add lines of bearing.  ", "Radial-menu 'Add LoB from here' on a self/sensor marker (or the LoB list panel): enter the azimuth, RSSI, frequency, the receiving antenna pattern, observer height, a confidence, and an emitter id (DMR / IMSI / MAC / callsign) and timestamp if known. Each LoB draws as a bearing wedge."),
-            ("The fix appears automatically.  ", "Two LoBs at the same frequency → a 'Cut'; three or more → a 'Fix' — computed by a maximum-likelihood (iteratively-reweighted Gauss-Newton) triangulator. You get the emitter position, the covariance-derived error ellipse (it stretches along bad-geometry directions, like a real DF system's), GDOP, the residual RMS, and CEP / 95 % radii."),
-            ("Terrain-aware bearings.  ", "With 'terrain-aware' on, a bearing without an explicit range is capped by the propagation engine — a terrain radial finds where the modelled signal crosses the observed RSSI. DF that respects mountains."),
-            ("Beyond bearings.  ", "POST /api/v1/geolocate/multilaterate does TDOA (± FDOA) hyperbolic location from ≥3 receivers (Chan-style init + weighted Gauss-Newton). POST /api/v1/df/aoa turns an antenna-array snapshot (inter-channel phases, or IQ) into a bearing via phase interferometry / MUSIC / Capon, with the CRLB σ — then feeds it straight into the fix."),
-        ], LS_T, size=10.0, lh=0.024, gap=0.012)
+            ("Add lines of bearing.  ", "Radial-menu 'Add LoB from here' on a self/sensor marker (or the LoB list panel): azimuth, RSSI, frequency, antenna pattern, observer height, confidence, emitter id (DMR / IMSI / MAC / callsign). Each LoB draws as a bearing wedge."),
+            ("The fix appears automatically.  ", "Two LoBs at the same frequency → a 'Cut'; three or more → a 'Fix' — computed by a maximum-likelihood (iteratively-reweighted Gauss-Newton) triangulator. You get the emitter position, a covariance-derived error ellipse, GDOP, residual RMS, and CEP / 95 % radii."),
+            ("Advanced fusion (new).  ", "On the DF tab the 'Advanced fusion' subsection runs ML-grid or EKF fusion across the current LoB list — more robust than pair-intersection on oblique baselines / non-Gaussian σ. 'Send to map' drops the result as an algorithm-origin emitter marker."),
+            ("Beyond bearings.  ", "POST /api/v1/geolocate/multilaterate does TDOA (± FDOA) hyperbolic location from ≥3 receivers. POST /api/v1/df/aoa turns an antenna-array snapshot (inter-channel phases, or IQ) into a bearing via phase interferometry / MUSIC / Capon + CRLB σ, then feeds it into the ML fix."),
+        ], LS_T, x_right=0.51, size=9.5, lh=0.022, gap=0.011)
+        _screenshot(ax, "tab_emitters", 0.53, 0.13, 0.42, top - 0.16,
+                     caption="Emitter Summary tab — fixes with origin badges",
+                     fallback_text="Emitter Summary")
     SL.append(("Geolocation — line-of-bearing → ML fix", "Tutorial · 7", s_df))
 
     # 8 — SDR console (1)
@@ -483,6 +533,102 @@ def build_tutorial(path):
               "More channels ⇒ tighter LoBs. LoBs that arrive are plotted on the map automatically from your GPS location, fused with any others at the same frequency, and pushed to ATAK as CoT.",
               0.945, LS_T, size=9, color=TEALD, lh=0.020)
     SL.append(("SDR console (2/2) — the DF bottom-panel tab", "Tutorial · 9", s_sdr2))
+
+    # 9a — Algorithms tab (single-channel DF + multi-method fusion)
+    def s_algos(ax, top):
+        _t(ax, 0.055, top - 0.028,
+           "When you only have one SDR — let motion do the array's job",
+           size=14, color=NAVY, weight="bold")
+        # Left column: prose + bullets
+        y = _bullets(ax, 0.055, top - 0.060, [
+            ("RSS log-distance ML.  ",
+             "Spatially-sampled RSSI from a moving single antenna → joint maximum-likelihood emitter position, "
+             "transmit power and path-loss exponent. Returns a covariance-derived error ellipse."),
+            ("RSS-gradient bearing.  ",
+             "Linear LS on closely-spaced RSS samples → spatial gradient direction = bearing to the emitter."),
+            ("Doppler closest-point-of-approach.  ",
+             "Hyperbolic S-curve fit on Doppler vs time as you pass a stationary emitter → CPA distance, CPA time, "
+             "and along-track offset (left/right ambiguous; resolve with a second pass)."),
+            ("FDOA multi-pose grid.  ",
+             "Each (vx, vy, Δf) at a different heading projects the LOS onto the velocity; stack three or more → "
+             "2-D position fix."),
+            ("Kinematic synthetic-aperture DoA.  ",
+             "Coherent IQ snapshots at known positions form a virtual array — beam-form (Bartlett / Capon / MUSIC) "
+             "exactly like a physical one. Aperture span sets the resolution."),
+            ("Phase-interferometry along track.  ",
+             "Carrier-phase Δφ between snapshots over a known baseline → direct DoA readout (ambiguity resolved by "
+             "a SAR prior)."),
+            ("ML grid fusion + EKF.  ",
+             "Universal back-stop: combine AoA from a DF head + RSS + Doppler + TDOA into one likelihood; the EKF "
+             "version refines sequentially as more observations land. The Algorithms panel auto-selects the most "
+             "specific feasible method for whatever observations you paste / load."),
+        ], LS_T, x_right=0.48, size=9.4, lh=0.022, gap=0.008)
+        # Right column: screenshot
+        _screenshot(ax, "tab_algorithms", 0.50, 0.13, 0.445, top - 0.16,
+                     caption="Algorithms tab — feasibility lights + heatmap + 'Send fix to map'",
+                     fallback_text="Algorithms tab")
+    SL.append(("Algorithms tab — single-channel DF + multi-method fusion",
+                "Tutorial · 10", s_algos))
+
+    # 9b — PTT auto-identify
+    def s_ptt(ax, top):
+        _t(ax, 0.055, top - 0.028,
+           "Capture · classify · route to the right open-source decoder",
+           size=14, color=NAVY, weight="bold")
+        y = _bullets(ax, 0.055, top - 0.060, [
+            ("How it works.  ",
+             "Auto-detect captures ~500 ms of IQ at the tune frequency and runs three in-process tests: occupied "
+             "bandwidth (FFT, 99 %), modulation family (envelope-constancy + k-means quantisation of the FM-disc + "
+             "FM-disc bandwidth — digital ≥ 3 kHz vs analog ≤ 3 kHz), and symbol rate (autocorrelation of the "
+             "rectified FM-discriminator derivative)."),
+            ("What it identifies.  ",
+             "DMR (Tier I/II/III) · dPMR · APCO P25 Phase 1 / Phase 2 · TETRA · NXDN 4800 / 9600 · D-STAR · YSF · "
+             "M17 · EDACS ProVoice · POCSAG / FLEX paging · narrowband / wideband FM voice · AM. Returns ranked "
+             "candidates with per-decoder availability so the UI can pick a fallback if your first-choice decoder "
+             "isn't installed."),
+            ("Decoder routing.  ",
+             "DMR / dPMR / NXDN / D-STAR / YSF / ProVoice → dsd-fme.  P25 → op25.  TETRA → tetra-rx.  M17 → "
+             "m17-demod.  POCSAG / FLEX → multimon-ng.  ACARS → acarsdec.  ADS-B → in-process Mode-S decoder. The "
+             "decoder catalogue uses an alias table so dump1090-fa / dump1090-mutability both register correctly."),
+            ("Installer covers the open ones.  ",
+             "./install.sh source-builds dsd-fme + m17-cxx-demod + acarsdec into /usr/local by default; "
+             "--with-op25 / --with-sdrtrunk / --with-tetra opts into the heavy ones (op25 pulls all of GNU Radio "
+             "for 30–60 min)."),
+        ], LS_T, x_right=0.48, size=9.6, lh=0.023, gap=0.010)
+        _screenshot(ax, "tab_df", 0.50, 0.13, 0.445, top - 0.16,
+                     caption="DF tab — Auto-detect verdict + alternative candidates",
+                     fallback_text="DF tab — Auto-detect")
+    SL.append(("Auto-detect PTT standards & route to the right decoder",
+                "Tutorial · 11", s_ptt))
+
+    # 9c — UAS / FPV video
+    def s_video(ax, top):
+        _t(ax, 0.055, top - 0.028,
+           "FPV / NTSC / PAL — IQ in, viewable raster out — no external software",
+           size=14, color=NAVY, weight="bold")
+        y = _bullets(ax, 0.055, top - 0.060, [
+            ("Auto-tune pipeline.  ",
+             "Multi-detector search (FM polar / IQ-balanced FM / AM envelope, scored by sync cadence) → H-sync PLL "
+             "with sub-sample line alignment → V-sync via equalising-pulse cadence → active samples-per-line "
+             "recovery → field-pair deinterlace → per-line peak-hold IIR clamp with tunable τ → NTSC YIQ / PAL YUV "
+             "chroma decode → RGB → frame averaging (EMA across N frames)."),
+            ("Operator overrides.  ",
+             "Force line rate, frame rate, pixel rate, active scanline duration, horizontal / vertical offsets, "
+             "width, peak-hold τ, frame-avg N, deinterlace on/off, colour decode on/off, multi-detector on/off. "
+             "Re-demodulate from the current capture without restarting the session."),
+            ("Display controls (client-side, instant).  ",
+             "Eleven colormaps: native colour · grayscale · amber CRT · green phosphor · blue · red · viridis · "
+             "plasma · inferno · ironbow (thermal) · night-vision · ice-blue. Brightness, contrast, gamma sliders. "
+             "Scanline FPS (poll cadence). Snapshot to PNG, record to WebM via MediaRecorder over the canvas."),
+            ("Spectrum max-hold for hunting.  ",
+             "Band scan with max-hold across sweeps so intermittent / hopping FPV downlinks 'draw themselves in' "
+             "over time. Resettable + keyed so concurrent scans don't collide."),
+        ], LS_T, x_right=0.48, size=9.6, lh=0.023, gap=0.010)
+        _screenshot(ax, "tab_video", 0.50, 0.13, 0.445, top - 0.16,
+                     caption="UAS Video panel — colormap + B/C/γ + snapshot/record",
+                     fallback_text="UAS Video panel")
+    SL.append(("UAS / FPV video decode — IQ to viewable raster",
+                "Tutorial · 12", s_video))
 
     # 10 — distributed sensing
     def s_mesh(ax, top):
@@ -553,7 +699,7 @@ def build_tutorial(path):
             ("Mesh integrity & rate limiting.  ", "ARES_MESH_SECRET signs every inter-node LoB / chat (HMAC-SHA256 over the content) and gates the WebSocket. A per-IP token-bucket rate limiter on /api/v1/* (tighter for /simulate & /packs/download), 429 on excess. An append-only audit log at data/audit.log (logins, device & peer changes, calibration, CoT-target & ATAK-toggle changes)."),
             ("CoT over mutual-TLS.  ", "tls:// targets with ARES_COT_TLS_CA / CERT / KEY — what a real TAK Server input expects. A CoT receive listener brings inbound GeoChat back into the chat hub."),
             ("Verify it works.  ", "cd backend && python -m tests.test_authoritative — a 53-check harness over ITM (incl. reference pins), the ML DF, TDOA, SGP4, HF, the array interferometry, and the security pass. cd frontend && node --test tests/ — 8 pure-maths checks. CI runs both on every push."),
-            ("Learn more.  ", "http://localhost:8000/docs (interactive API) · docs/AUTHORITATIVE_v2.md (what's authoritative vs. still approximate) · docs/DEPLOYMENT.md (Jetson / laptop / Pi / cloud, air-gapped, CoT, GPS, the smoke test) · docs/BUILD_PLAN.md (the workstreams) · the source: backend/app/ (Python), frontend/src/ (React)."),
+            ("Learn more.  ", "http://localhost:8000/docs (interactive API) · docs/Ares.md (module-by-module: what's rigorous vs. still approximate) · docs/DEPLOYMENT.md (Jetson / laptop / Pi / cloud, air-gapped, CoT, GPS, the smoke test) · docs/BUILD_PLAN.md (the workstreams) · the source: backend/app/ (Python), frontend/src/ (React)."),
             ("New to programming?  ", "Ask the project chat for the learning roadmap — which languages and concepts (Python · JavaScript/React · web/HTTP/JSON · the RF / DF / SDR / GIS / TAK domain · the maths) to study, in what order, and which track to pick."),
         ], LS_T, size=9.8, lh=0.0235, gap=0.010)
     SL.append(("Security & where to learn more", "Tutorial · 14", s_more))
@@ -569,12 +715,12 @@ def build_tutorial(path):
         _t(ax, 0.072, 0.745, "A hands-on tour of the most important features", size=16, color="#bcd0e4")
         _bullets(ax, 0.08, 0.55, [
             "Running it · the map · coverage & point-to-point links",
-            "Geolocation by line of bearing — the ML fix and its error ellipse",
-            "The SDR console — single- vs multi-channel, GPS, compass modes & calibration",
-            "The DF panel — stacked spectrum + waterfall + compass + options",
-            "Distributed sensing over a MANET · group chat · the ATAK / Server console",
-            "HF & satellites · security · where to learn more",
-        ], LS_T, x_right=0.92, size=11.5, lh=0.040, gap=0.006, color="#dbe6f0", bcolor=TEAL)
+            "Geolocation — line-of-bearing, ML fix, error ellipse, advanced fusion",
+            "The SDR console + DF panel — spectrum, waterfall, live AoA, calibration",
+            "Algorithms tab — single-channel DF (RSS / Doppler-CPA / synthetic aperture / EKF)",
+            "Auto-detect PTT (DMR/P25/TETRA/NXDN/D-STAR/YSF/M17) → right decoder",
+            "UAS / FPV video decode · MANET sensing · chat · ATAK / TAK · HF / SAT",
+        ], LS_T, x_right=0.92, size=11.0, lh=0.038, gap=0.006, color="#dbe6f0", bcolor=TEAL)
         _t(ax, 0.07, 0.18, "Open  http://localhost:8000  (or :3000) alongside this deck — the interactive API is at  /docs.", size=10.5, color="#9fb6cc")
         _t(ax, 0.07, 0.115, VERSION + "   ·   regenerate with  docs/build_pdfs.py", size=9, color="#7f96ac")
         _footer(ax, "Tutorial", 1, total); pdf.savefig(fig); plt.close(fig)

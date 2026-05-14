@@ -20,7 +20,7 @@ from app.core.simulation import (
 from app.core.propagation.antenna import AntennaConfig, AntennaType, ANTENNA_CATALOGUE
 from app.core.propagation.models import PropagationModel
 from app.core.propagation.space_weather import fetch_space_weather
-from app.core.propagation.terrain import TerrainManager, haversine_distance
+from app.core.propagation.terrain import TerrainManager, haversine_distance, destination_point
 from app.core.propagation.atmosphere import (
     get_surface_refractivity, compute_muf, compute_luf
 )
@@ -642,6 +642,180 @@ async def terrain_grid(
         except Exception:
             pass
         return grid
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await terrain.close()
+
+
+@router.get("/terrain/contours")
+async def terrain_contours(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius_km: float = Query(10.0, ge=0.5, le=100),
+    interval_m: float = Query(50.0, ge=1, le=2000),
+    grid_size: int = Query(80, ge=20, le=200),
+    resolution: str = Query("srtm3", pattern="^(srtm1|srtm3)$"),
+):
+    """
+    Generate elevation contour lines as GeoJSON.
+
+    Samples a `grid_size × grid_size` elevation grid spanning ±radius_km from
+    (lat, lon), then runs matplotlib's contour generator at `interval_m`
+    intervals between the grid's min and max heights. Returns a FeatureCollection
+    of LineString features tagged with `elevation_m` so the client can style
+    bands (every 5th line darker, etc.).
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    terrain = TerrainManager(resolution=resolution)
+    try:
+        grid = await terrain.get_elevation_grid(lat, lon, radius_km, grid_size)
+        rows = grid.get("elevations") or []
+        if not rows or not rows[0]:
+            return {"type": "FeatureCollection", "features": [], "note": "no terrain data"}
+        Z = np.array(rows, dtype=float)
+        if Z.max() - Z.min() < 0.5:
+            return {"type": "FeatureCollection", "features": [], "note": "area is effectively flat"}
+        # Build the lat/lon grid axes. get_elevation_grid samples in a square
+        # centered on (lat, lon); we reconstruct that span here so contour
+        # coordinates land in real-world lat/lon for the GeoJSON output.
+        # ±radius_km in metres → degrees (~111_320 m per degree latitude).
+        deg_lat = radius_km * 1000.0 / 111_320.0
+        deg_lon = deg_lat / max(0.1, math.cos(math.radians(lat)))
+        lons = np.linspace(lon - deg_lon, lon + deg_lon, Z.shape[1])
+        lats = np.linspace(lat - deg_lat, lat + deg_lat, Z.shape[0])
+        zmin = float(np.floor(Z.min() / interval_m) * interval_m)
+        zmax = float(np.ceil(Z.max() / interval_m) * interval_m)
+        levels = np.arange(zmin, zmax + interval_m, interval_m)
+        if len(levels) > 200:
+            raise HTTPException(400, f"too many contour levels ({len(levels)}); raise interval_m")
+        fig, ax = plt.subplots()
+        try:
+            cs = ax.contour(lons, lats, Z, levels=levels)
+            features = []
+            # Newer matplotlib (3.8+) exposes paths via cs.get_paths() per level.
+            for level_idx, level in enumerate(cs.levels):
+                try:
+                    seg_lists = cs.allsegs[level_idx]
+                except Exception:
+                    seg_lists = []
+                for seg in seg_lists:
+                    if len(seg) < 2:
+                        continue
+                    coords = [[float(x), float(y)] for x, y in seg]
+                    features.append({
+                        "type": "Feature",
+                        "geometry": {"type": "LineString", "coordinates": coords},
+                        "properties": {"elevation_m": float(level)},
+                    })
+            return {"type": "FeatureCollection", "features": features,
+                    "metadata": {"levels": [float(l) for l in levels], "interval_m": interval_m,
+                                 "min_m": float(Z.min()), "max_m": float(Z.max())}}
+        finally:
+            plt.close(fig)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await terrain.close()
+
+
+class ViewshedRequest(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    observer_height_m: float = Field(2.0, ge=0, le=500)
+    target_height_m: float = Field(2.0, ge=0, le=500)
+    radius_km: float = Field(10.0, gt=0, le=50)
+    num_radials: int = Field(180, ge=16, le=720)
+    points_per_radial: int = Field(80, ge=10, le=400)
+    resolution: str = Field("srtm3", pattern="^(srtm1|srtm3)$")
+    earth_curvature: bool = Field(True)
+
+
+@router.post("/viewshed")
+async def viewshed(req: ViewshedRequest):
+    """
+    Binary line-of-sight viewshed from an observer.
+
+    Walks `num_radials` outward from (lat, lon), sampling elevation along each
+    bearing. A point is "visible" if no terrain between observer and target
+    rises above the straight-line ray at that point (accounting for Earth
+    curvature when enabled). Returns the visible region as a GeoJSON polygon
+    so the client renders it as a single coverage-style overlay.
+
+    This is the pure-geometry LoS upper bound — no RF, no diffraction. Distinct
+    from /simulate/coverage which models actual signal propagation.
+    """
+    import numpy as np
+
+    terrain = TerrainManager(resolution=req.resolution)
+    try:
+        # Sample observer height first (so we can detect "observer underground"
+        # and surface a useful error rather than a degenerate viewshed).
+        obs_terrain = await terrain.get_elevation(req.lat, req.lon)
+        obs_alt = (obs_terrain or 0.0) + req.observer_height_m
+        # k=4/3 Earth radius approximation for refractive bending of the ray.
+        R_eff = 6_371_000.0 * (4.0 / 3.0 if req.earth_curvature else 1.0)
+        # Reach: equivalent metres at each step.
+        step_m = (req.radius_km * 1000.0) / req.points_per_radial
+        boundary = []   # [(lat, lon), ...] visible-edge points, one per radial
+        for ri in range(req.num_radials):
+            az = (360.0 / req.num_radials) * ri
+            last_visible_d = 0.0
+            blocked = False
+            for ki in range(1, req.points_per_radial + 1):
+                d = ki * step_m
+                p = destination_point(req.lat, req.lon, az, d)
+                # Earth-curvature drop: terrain at distance d sits geometrically
+                # lower than a flat-earth model by d² / (2 R_eff).
+                t_h = (await terrain.get_elevation(p[0], p[1])) or 0.0
+                drop = (d * d) / (2.0 * R_eff)
+                # Required ray altitude at this distance for LoS to a target_height_m
+                # antenna there: must be ≥ ground + target_height - drop.
+                target_floor = t_h + req.target_height_m - drop
+                # Observer-line altitude AT distance d (linear from obs_alt towards target_floor
+                # only matters if we compare against intervening terrain).
+                # Use the steepest-ratio test: visible iff (target_floor - obs_alt) / d >=
+                # max over k<=ki of (terrain_k - obs_alt) / d_k. We approximate by tracking
+                # the max ratio seen so far on this radial.
+                if ki == 1:
+                    max_ratio = (target_floor - obs_alt) / d
+                    last_visible_d = d
+                    continue
+                ratio = (target_floor - obs_alt) / d
+                if ratio < max_ratio:
+                    # Behind the ridge — not visible. Mark and stop walking.
+                    blocked = True
+                    break
+                max_ratio = ratio
+                last_visible_d = d
+            # Edge point for this radial (last visible distance, or full radius if unblocked)
+            edge = destination_point(req.lat, req.lon, az, last_visible_d if blocked else req.radius_km * 1000.0)
+            boundary.append([edge[1], edge[0]])    # GeoJSON is [lon, lat]
+        # Close the polygon ring
+        if boundary and boundary[0] != boundary[-1]:
+            boundary.append(boundary[0])
+        return {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [boundary]},
+                "properties": {
+                    "observer": {"lat": req.lat, "lon": req.lon, "height_m": req.observer_height_m},
+                    "target_height_m": req.target_height_m,
+                    "radius_km": req.radius_km,
+                    "kind": "viewshed",
+                },
+            }],
+            "metadata": {
+                "observer_terrain_m": float(obs_terrain or 0.0),
+                "observer_total_alt_m": float(obs_alt),
+                "num_radials": req.num_radials,
+            },
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

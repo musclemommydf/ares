@@ -248,19 +248,6 @@ class RegionDownloadRequest(BaseModel):
     source: Optional[str] = None                                                # explicit tile-server / Overpass URL
 
 
-@router.post("/regions/{code}/estimate")
-async def estimate_region(code: str, req: RegionDownloadRequest, principal: dict = Depends(require_auth)):
-    """Estimate the download size, per layer, for a region pack request — *without* fetching
-    anything. Drives the "Get download estimate" button in the Layer Manager so the user sees
-    each item's size before committing to the download."""
-    from app.core import regions, pack_builder
-    region = regions.get_region(code)
-    if region is None:
-        raise HTTPException(404, f"no such region {code!r}")
-    est = pack_builder.estimate_bytes(req.layers, region["bbox"], req.max_zoom)
-    return {"region": region, **est, "layers": req.layers, "max_zoom": req.max_zoom}
-
-
 class BboxDownloadRequest(BaseModel):
     bbox: list[float]                                                            # [w, s, e, n]
     layers: list[str] = ["terrain", "imagery", "buildings", "osm", "clutter"]
@@ -269,6 +256,8 @@ class BboxDownloadRequest(BaseModel):
     name: Optional[str] = None                                                   # optional human label
 
 
+# NOTE: the /regions/by-bbox/* routes MUST be declared before /regions/{code}/* — FastAPI matches
+# in declaration order, and "by-bbox" would otherwise be swallowed by the {code} path param.
 @router.post("/regions/by-bbox/estimate")
 async def estimate_bbox(req: BboxDownloadRequest, principal: dict = Depends(require_auth)):
     """Like ``/regions/{code}/estimate`` but takes a freeform bbox. Drives the "Draw on map"
@@ -304,6 +293,19 @@ async def download_bbox(req: BboxDownloadRequest, principal: dict = Depends(requ
               "country": "(custom)", "bbox": bbox}
     return {"region": region, "jobs": jobs,
             "note": "drawn-bbox pack — same persistent library as named-region downloads"}
+
+
+@router.post("/regions/{code}/estimate")
+async def estimate_region(code: str, req: RegionDownloadRequest, principal: dict = Depends(require_auth)):
+    """Estimate the download size, per layer, for a region pack request — *without* fetching
+    anything. Drives the "Get download estimate" button in the Layer Manager so the user sees
+    each item's size before committing to the download."""
+    from app.core import regions, pack_builder
+    region = regions.get_region(code)
+    if region is None:
+        raise HTTPException(404, f"no such region {code!r}")
+    est = pack_builder.estimate_bytes(req.layers, region["bbox"], req.max_zoom)
+    return {"region": region, **est, "layers": req.layers, "max_zoom": req.max_zoom}
 
 
 @router.post("/regions/{code}/download")

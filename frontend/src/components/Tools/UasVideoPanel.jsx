@@ -2,8 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { X, RefreshCw, Radio, Crosshair, MapPin, Layers, FileSearch } from 'lucide-react'
 import {
   getUasFeedTypes, scanUas, startUasDecode, getUasSessions, getUasSessionMetadata,
-  deleteUasSession, exploitUasSession, parseRid,
+  deleteUasSession, exploitUasSession, parseRid, redemodUasSession,
 } from '../../api/client'
+import {
+  UasVideoCanvas, UasVideoControlsPanel,
+  DEFAULT_DISPLAY_CONTROLS, DEFAULT_DEMOD_OPTS,
+} from './UasVideoControls'
 
 const MHz = (hz) => (hz / 1e6).toFixed(3)
 const card = { background: '#0d1117', border: '1px solid #21262d', borderRadius: 8 }
@@ -38,6 +42,11 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
   const ridSum = ridResult?.parsed?.summary || ridResult?.parsed
   const [frameTick, setFrameTick] = useState(0)        // cache-buster for the decoded-video <img>
   const frameRef = useRef(null)
+  // Display-side (browser canvas) controls.
+  const [displayControls, setDisplayControls] = useState(DEFAULT_DISPLAY_CONTROLS)
+  // Backend demod options (sent to /uas/decode and /uas/sessions/:sid/redemod).
+  const [demodOpts, setDemodOpts] = useState(DEFAULT_DEMOD_OPTS)
+  const [activeCanvas, setActiveCanvas] = useState(null)
 
   useEffect(() => {
     getUasFeedTypes().then(d => setFeedTypes(d.feed_types || [])).catch(() => {})
@@ -45,13 +54,16 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
     return () => { if (pollRef.current) clearInterval(pollRef.current); if (frameRef.current) clearInterval(frameRef.current) }
   }, [])
 
-  // refresh the decoded raster-frame image while an analog-video session is live
+  // refresh the decoded raster-frame image while an analog-video session is live.
+  // The poll cadence is driven by the operator's "Scanline FPS" slider so they can
+  // choose whether to prioritise latency or CPU usage.
   useEffect(() => {
     if (frameRef.current) { clearInterval(frameRef.current); frameRef.current = null }
     if (!session?.video_url) return
-    frameRef.current = setInterval(() => setFrameTick(t => t + 1), 900)
+    const fps = Math.max(1, Math.min(20, displayControls.scanlineFps || 5))
+    frameRef.current = setInterval(() => setFrameTick(t => t + 1), Math.round(1000 / fps))
     return () => { if (frameRef.current) clearInterval(frameRef.current) }
-  }, [session?.video_url])
+  }, [session?.video_url, displayControls.scanlineFps])
 
   // poll the decoded MISB metadata while a session with a metadata_url is live
   useEffect(() => {
@@ -77,12 +89,26 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
     finally { setScanning(false) }
   }
 
+  // Build the JSON body that goes to /uas/decode and /uas/sessions/:sid/redemod.
+  // `_capture_seconds` is a UI-only key we transcribe to the request-level field.
+  const buildDecodeBody = () => {
+    const { _capture_seconds, ...rest } = demodOpts || {}
+    // Strip falsy/blank operator-override fields so the backend only sees the ones the user set.
+    const analog_options = Object.fromEntries(Object.entries(rest).filter(([, v]) =>
+      v !== null && v !== undefined && v !== '' && !(typeof v === 'number' && Number.isNaN(v))
+    ))
+    const out = { analog_options }
+    if (_capture_seconds && Number.isFinite(_capture_seconds)) out.capture_seconds = _capture_seconds
+    return out
+  }
+
   const decode = async (d) => {
     setExploit(null); setMetadata(null)
     try {
       const s = await startUasDecode({
         device_id: deviceId || undefined, frequency_hz: d.center_hz, feed_type: d.feed_type,
         bandwidth_hz: d.bandwidth_hz, label: d.feed_name, push_to_atak: true,
+        ...buildDecodeBody(),
       })
       setSession(s)
     } catch (e) { setScanErr('Decode start failed: ' + (e?.response?.data?.detail || e?.message || e)) }
@@ -90,9 +116,17 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
   const decodeAtFreq = async () => {
     setExploit(null); setMetadata(null); setScanErr('')
     try {
-      const s = await startUasDecode({ device_id: deviceId || undefined, frequency_hz: Number(decodeFreqMHz) * 1e6, bandwidth_hz: 8e6, push_to_atak: true })
+      const s = await startUasDecode({ device_id: deviceId || undefined, frequency_hz: Number(decodeFreqMHz) * 1e6, bandwidth_hz: 8e6, push_to_atak: true, ...buildDecodeBody() })
       if (s.error) setScanErr(s.error); else setSession(s)
     } catch (e) { setScanErr('Decode failed: ' + (e?.response?.data?.detail || e?.message || e)) }
+  }
+  const onRedemod = async (opts) => {
+    if (!session?.id) return
+    const body = buildDecodeBody()
+    try {
+      const s = await redemodUasSession(session.id, body)
+      if (s && !s.error) setSession(s)
+    } catch (e) { setScanErr('Re-demod failed: ' + (e?.response?.data?.detail || e?.message || e)) }
   }
   const stopSession = async () => { if (session?.id) { try { await deleteUasSession(session.id) } catch {} } setSession(null); setMetadata(null); setExploit(null) }
   const runExploit = async () => { if (!session?.id) return; try { setExploit(await exploitUasSession(session.id)) } catch (e) { setExploit({ error: e?.response?.data?.detail || String(e) }) } }
@@ -173,10 +207,31 @@ export default function UasVideoPanel({ onClose, mapCenter, onLoadGeoJSON, onLoc
 
             {/* decoded video / demod readout */}
             {session.video_url ? (
-              // analog feed: the native FM/composite demod recovered raster frame(s) — re-fetch periodically
-              <img alt="decoded video frame" src={`${session.video_url}?i=${frameTick}`}
-                   style={{ width: '100%', maxHeight: 300, objectFit: 'contain', background: '#000', borderRadius: 6, marginBottom: 8, imageRendering: 'pixelated' }}
-                   onError={e => { e.currentTarget.style.display = 'none' }} />
+              <>
+                <UasVideoCanvas
+                  src={session.video_url}
+                  tick={frameTick}
+                  controls={displayControls}
+                  onCanvas={setActiveCanvas}
+                />
+                {/* show what the native demod actually did */}
+                {session.demod && (session.demod.color_decoded || session.demod.detector || session.demod.line_rate_hz_est) && (
+                  <div style={{ fontSize: 10, color: '#6e7681', marginBottom: 6 }}>
+                    demod: {session.demod.detector || '—'}
+                    {session.demod.color_decoded ? ' · colour decoded' : ''}
+                    {session.demod.line_rate_hz_est ? ` · line ≈ ${Math.round(session.demod.line_rate_hz_est)} Hz` : ''}
+                    {session.demod.active_samples_per_line ? ` · active ${session.demod.active_samples_per_line} sa/line` : ''}
+                    {session.demod.snr_db_est != null ? ` · SNR ≈ ${session.demod.snr_db_est} dB` : ''}
+                    {session.demod.n_frames != null ? ` · ${session.demod.n_frames} frame(s)` : ''}
+                  </div>
+                )}
+                <UasVideoControlsPanel
+                  controls={displayControls} setControls={setDisplayControls}
+                  demodOpts={demodOpts} setDemodOpts={setDemodOpts}
+                  canvas={activeCanvas} sessionId={session.id}
+                  onRedemod={onRedemod}
+                />
+              </>
             ) : (
               <div style={{ ...card, background: '#000', borderRadius: 6, marginBottom: 8, padding: 14, minHeight: 110, display: 'flex', flexDirection: 'column', justifyContent: 'center', textAlign: 'center', gap: 6 }}>
                 {session.transport === 'proprietary'

@@ -150,6 +150,34 @@ data class GeoFixResponse(
     val geojson: JsonObject? = null,
 )
 
+// ── /lob/range_estimate (terrain-aware LoB capping) ──────────────────────────
+@Serializable
+data class LoBRangeEstimateRequest(
+    @SerialName("observer_lat") val observerLat: Double,
+    @SerialName("observer_lon") val observerLon: Double,
+    @SerialName("observer_height_m") val observerHeightM: Double = 1.5,
+    @SerialName("azimuth_deg") val azimuthDeg: Double,
+    @SerialName("frequency_hz") val frequencyHz: Double,
+    @SerialName("tx_power_dbm") val txPowerDbm: Double,
+    @SerialName("observed_rssi_dbm") val observedRssiDbm: Double,
+    @SerialName("propagation_model") val propagationModel: String = "itm",
+    @SerialName("diffraction_model") val diffractionModel: String = "deygout",
+    @SerialName("clutter_height_m") val clutterHeightM: Double = 0.0,
+    @SerialName("terrain_resolution") val terrainResolution: String = "srtm1",
+    val context: Int = 2,
+    @SerialName("max_range_km") val maxRangeKm: Double = 150.0,
+    @SerialName("num_points") val numPoints: Int = 300,
+)
+
+@Serializable
+data class LoBRangeEstimateResponse(
+    val status: String? = null,
+    @SerialName("estimated_distance_m") val estimatedDistanceM: Double? = null,
+    val confidence: String? = null,
+    @SerialName("propagation_mode") val propagationMode: String? = null,
+    val profile: List<JsonObject> = emptyList(),
+)
+
 // ── ATAK radio templates (Ares-native schema) ────────────────────────────────
 @Serializable
 data class RadioTemplate(

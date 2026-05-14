@@ -35,11 +35,14 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 import { signalToColor, exportCoverageKmz } from '../../api/client'
 import { useViewMode } from '../../hooks/useViewMode'
 import { BASEMAPS, useMapPrefs } from './mapPrefs'
+import CompassRose from './CompassRose'
+import { buildAntennaLobeEntity } from './AntennaPattern3D'
 import MapSettingsCog from './MapSettingsCog'
 import { geocodeNominatim } from '../../utils/geocode'
 import { polarPatternGainDb, POLAR_PATTERNS } from '../../utils/polarPatterns'
 
 const NatoSymbolPicker = lazy(() => import('./NatoSymbolPicker'))
+import ErrorBoundary from '../Common/ErrorBoundary'
 let _msPromise = null
 const getMilsymbol = () => (_msPromise ??= import('milsymbol').then((m) => m.default || m))
 
@@ -83,6 +86,8 @@ export default function GlobeView({
   onDrawComplete,                                        // (type, data) — same callback the 2D map uses
   extraTxList = [],                                      // additional transmitters → TX markers on the globe
   geolocationGeoJSON = null,                             // DF picture: bearing wedges, Cut/Fix centroids, CAP/CEP ellipses
+  dfObservers = [],                                      // [{ lat, lon, heading_deg, hpbw_deg, lobe_radius_m?, color?, label?, id? }]
+                                                          // — DF antenna patterns rendered as Cesium lobes at observer positions
   gpsFix = null,                                         // {lat, lon, heading_deg?, source} — operator "you are here" marker
 }) {
   const containerRef = useRef(null)
@@ -117,6 +122,9 @@ export default function GlobeView({
   const [drawPaletteOpen, setDrawPaletteOpen] = useState(false)
   const [natoPickerOpen, setNatoPickerOpen] = useState(false)
   const [drawTool, setDrawTool] = useState(null)   // null | point | line | polygon | rectangle | circle | ellipse | freehand | rangeRings | fan | rb | geofence | mil* | nato
+  // Camera heading drives CompassRose rotation. Updated via viewer.camera.changed
+  // listener on creation; click on the rose flies camera back to heading=0.
+  const [headingDeg, setHeadingDeg] = useState(0)
 
   // ── create / destroy the viewer ────────────────────────────────────────────
   useEffect(() => {
@@ -165,6 +173,15 @@ export default function GlobeView({
       cc.maximumZoomDistance = 5.0e7
     } catch (e) { /* older Cesium — keep the defaults */ }
     requestRenderRef.current = () => { try { viewer.scene.requestRender() } catch { /* noop */ } }
+    // Track camera heading so the CompassRose stays in sync. Cesium's camera.changed
+    // fires on any camera mutation; we throttle by only updating when the heading
+    // changes by ≥ 0.5° to avoid React thrash on free-look mouse moves.
+    let lastHeading = 0
+    const onCameraChanged = () => {
+      const h = ((Cesium.Math.toDegrees(viewer.camera.heading) % 360) + 360) % 360
+      if (Math.abs(h - lastHeading) >= 0.5) { lastHeading = h; setHeadingDeg(h) }
+    }
+    try { viewer.camera.changed.addEventListener(onCameraChanged) } catch { /* noop */ }
     // (basemap imagery is applied by its own effect below, so it tracks the shared store)
 
     const ds = new Cesium.CustomDataSource('ares')
@@ -294,11 +311,25 @@ export default function GlobeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basemapId, offlineImagery])
 
-  // ── map brightness (applies the ⚙'s slider to the Cesium basemap layer) ──
+  // ── map brightness + night-vision (applies the ⚙ controls to the Cesium basemap layer) ──
+  // Night vision shifts the imagery toward red via hue/saturation — same purpose as the
+  // 2D CSS-filter path: preserve dark adaptation in low-light field use.
+  const nightVision = useMapPrefs((s) => s.nightVision)
   useEffect(() => {
     const l = imageryLayerRef.current
-    if (l) { try { l.brightness = (mapBrightness ?? 100) / 100; requestRenderRef.current() } catch { /* noop */ } }
-  }, [mapBrightness])
+    if (!l) return
+    try {
+      l.brightness = (mapBrightness ?? 100) / 100
+      if (nightVision) {
+        l.hue = -1.6                     // approx 310° rotation toward red
+        l.saturation = 3.5               // crush other channels so it reads "red"
+      } else {
+        l.hue = 0
+        l.saturation = 1
+      }
+      requestRenderRef.current()
+    } catch { /* noop */ }
+  }, [mapBrightness, nightVision])
 
   // ── offline data packs: imagery (osm-base / satellite) layers + extruded buildings ──
   // Detected once on mount. Each XYZ-raster pack becomes a UrlTemplateImageryProvider
@@ -861,6 +892,26 @@ export default function GlobeView({
       addAntennaLobe(ds, tx, antennaAzimuthDeg, antennaTiltDeg, antennaPattern)
     }
 
+    // DF-observer antenna pattern overlay. Renders a translucent reception
+    // lobe at every supplied observer location — wired here so the moment the
+    // SDR-state hook supplies devices (with hpbw + heading), they appear on
+    // the globe.
+    for (const obs of (dfObservers || [])) {
+      if (typeof obs?.lat !== 'number' || typeof obs?.lon !== 'number') continue
+      try {
+        ds.entities.add(buildAntennaLobeEntity({
+          lat: obs.lat, lon: obs.lon,
+          headingDeg: obs.heading_deg ?? 0,
+          hpbwDeg: obs.hpbw_deg ?? 360,
+          lobeRadiusM: obs.lobe_radius_m ?? 1200,
+          omni: (obs.hpbw_deg ?? 360) >= 359,
+          color: obs.color || '#a78bfa',
+          altitudeM: 8,
+          label: obs.label || `Obs ${obs.id || ''}`,
+        }))
+      } catch (e) { console.debug('[GlobeView] DF observer lobe failed', e) }
+    }
+
     // RX marker + LOS line + Fresnel + obstruction check
     if (rxPoint && typeof rxPoint.lat === 'number' && typeof rxPoint.lon === 'number') {
       const rxPos = Cesium.Cartesian3.fromDegrees(rxPoint.lon, rxPoint.lat, rxPoint.height_m || 0)
@@ -956,9 +1007,28 @@ export default function GlobeView({
   const btn = (active) => `btn ${active ? 'btn-primary' : 'btn-ghost'}`
   const BTN_STYLE = { padding: '3px 8px', fontSize: 13 }
 
+  // Click compass → flyTo-north (keep current center + pitch, zero heading).
+  const resetHeadingToNorth = () => {
+    const v = viewerRef.current; if (!v) return
+    try {
+      v.camera.flyTo({
+        destination: v.camera.position.clone(),
+        orientation: { heading: 0, pitch: v.camera.pitch, roll: 0 },
+        duration: 0.4,
+      })
+    } catch { /* noop */ }
+  }
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+
+      {/* CompassRose — top-left, rotates with camera, click flies to north. */}
+      {!err && showCompassRose && (
+        <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 700, pointerEvents: 'auto' }}>
+          <CompassRose size={70} headingDeg={headingDeg} onClick={resetHeadingToNorth} />
+        </div>
+      )}
 
       {/* Floating toolbar — visually identical to the 2D map's toolbar.
           zIndex 700 keeps it + the (downward-expanding) draw palette above the bottom panel (zIndex 600). */}
@@ -1021,9 +1091,14 @@ export default function GlobeView({
               </div>
               {natoPickerOpen && (
                 <div style={{ background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, padding: '4px 6px', marginBottom: 6 }}>
-                  <Suspense fallback={<div style={{ fontSize: 11, color: '#8b949e', padding: 12, textAlign: 'center' }}>Loading NATO symbology…</div>}>
-                    <NatoSymbolPicker ctrl={null} onArm={(arm) => { natoArmRef.current = arm; setDrawTool('nato'); setNatoPickerOpen(false); setDrawPaletteOpen(false) }} />
-                  </Suspense>
+                  {/* ErrorBoundary so a module-load / render error inside the
+                      lazy chunk surfaces instead of stranding the Suspense
+                      fallback ("stuck loading"). */}
+                  <ErrorBoundary label="NATO symbology picker (3D)" resetKey={natoPickerOpen}>
+                    <Suspense fallback={<div style={{ fontSize: 11, color: '#8b949e', padding: 12, textAlign: 'center' }}>Loading NATO symbology…</div>}>
+                      <NatoSymbolPicker ctrl={null} onArm={(arm) => { natoArmRef.current = arm; setDrawTool('nato'); setNatoPickerOpen(false); setDrawPaletteOpen(false) }} />
+                    </Suspense>
+                  </ErrorBoundary>
                 </div>
               )}
               <div style={{ fontSize: 10, color: '#6e7681', marginTop: 4 }}>Click to place; right-click finishes lines / polygons / range-bearing; drag for freehand.</div>

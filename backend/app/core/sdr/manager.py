@@ -398,6 +398,28 @@ class SDRManager:
         bucket = int(round(ev.frequency_hz / _FREQ_BUCKET_HZ))
         dq = self._lobs_by_freq.setdefault(bucket, deque(maxlen=_LOB_BUFFER_MAX))
         dq.append(ev)
+        # If the LoB carries an emitter identifier, also push it into the
+        # per-target tracker so the Targets tab gets a running peak-RSSI +
+        # range estimate. Identifier kind: the LoB's free-text `device_type`
+        # field is used (DMR/IMSI/MAC/callsign/icao/...); falls back to
+        # "other" when the operator didn't tag it.
+        if ev.target_device_id:
+            try:
+                from app.core import targets as _targets
+                _targets.record(
+                    kind=(ev.device_type or "other").lower(),
+                    value=str(ev.target_device_id),
+                    observer_lat=float(ev.lat or 0.0),
+                    observer_lon=float(ev.lon or 0.0),
+                    rssi_dbm=(float(ev.rssi_dbm) if ev.rssi_dbm is not None else None),
+                    bearing_deg=float(ev.azimuth_deg),
+                    sigma_deg=(float(ev.azimuth_sigma_deg) if getattr(ev, "azimuth_sigma_deg", None) else None),
+                    frequency_hz=float(ev.frequency_hz),
+                    t=float(ev.t),
+                    metadata={"origin_node": ev.origin_node, "source_device_id": ev.device_id},
+                )
+            except Exception:
+                log.debug("targets.record failed for LoB %s", ev.id, exc_info=True)
         self._broadcast({"type": "lob", "lob": asdict(ev), "device": dev.public() if dev else None})
         # CoT push (best-effort)
         try:

@@ -394,9 +394,48 @@ async def audio_modes(principal: dict = Depends(require_auth)):
     return dsp.audio_mode_info()
 
 
+class IdentifyPttRequest(BaseModel):
+    device_id: Optional[str] = None
+    frequency_hz: float = Field(..., gt=0)
+    bandwidth_hz: float = Field(25_000.0, gt=1_000)
+    capture_seconds: float = Field(0.5, ge=0.1, le=5.0)
+
+
+@router.post("/audio/identify_ptt")
+async def identify_ptt(body: IdentifyPttRequest, principal: dict = Depends(require_auth)):
+    """Capture a short IQ snippet at ``frequency_hz`` and identify which PTT
+    standard is present — DMR / P25 / TETRA / NXDN / D-STAR / YSF / M17 / etc.
+    Returns the verdict + suggested decoder + which decoders are installed,
+    so the UI can switch the audio-mode dropdown automatically.
+
+    Pure in-process classifier: occupied bandwidth, FM-discriminator k-means
+    quantisation (digital vs analog), and rectified-derivative autocorrelation
+    for symbol rate. No external service.
+    """
+    from app.core.sdr import dsp, ptt_classifier, uas_video
+    dev = sdr_manager.get(body.device_id) if body.device_id else None
+    device_dict = dev.public() if dev is not None else {"id": "synthetic", "metadata": {}}
+    rate = float(max(2.0e6, min(40e6, body.bandwidth_hz * 1.6)))
+    n_samples = max(1 << 15, int(rate * body.capture_seconds))
+    iq = uas_video._capture_iq(device_dict, float(body.frequency_hz), rate, n_samples, channel=0)
+    if iq is None:
+        return {"ok": False, "error": "no IQ available — wire an SDR or install SoapySDR"}
+    installed = set(dsp.available_decoders())
+    result = ptt_classifier.classify_ptt(iq, rate, center_hz=body.frequency_hz,
+                                           installed_decoders=installed)
+    # Annotate every candidate with whether its decoder is on PATH.
+    for c in result.get("candidates", []) or []:
+        c["decoder_installed"] = (c["decoder"] == "builtin") or (c["decoder"] in installed)
+    result["installed_decoders"] = sorted(installed)
+    result["capture"] = {"rate_hz": rate, "n_samples": int(getattr(iq, "size", 0)),
+                          "duration_s": body.capture_seconds}
+    return result
+
+
 class AudioDecodeRequest(BaseModel):
     frequency_hz: float
     mode: str
+    auto_detect: bool = False     # if true, ignore `mode` and let identify_ptt pick
 
 
 @router.post("/devices/{device_id}/audio")
@@ -404,8 +443,53 @@ async def device_audio(device_id: str, body: AudioDecodeRequest, principal: dict
     dev = sdr_manager.get(device_id)
     if dev is None:
         raise HTTPException(404, "no such device")
-    from app.core.sdr import dsp
-    return dsp.start_audio_decode(dev.public(), body.frequency_hz, body.mode)
+    from app.core.sdr import dsp, ptt_classifier, uas_video
+    mode = body.mode
+    auto = None
+    # If the client asked for auto-detect (or sent mode='auto'), run the
+    # PTT classifier first and use its verdict as the mode.
+    if body.auto_detect or body.mode in ("auto", "auto_detect", ""):
+        rate = float(max(2.0e6, min(40e6, 25_000 * 1.6)))   # 25 kHz channel default
+        n = max(1 << 15, int(rate * 0.5))                   # 500 ms capture
+        iq = uas_video._capture_iq(dev.public(), float(body.frequency_hz), rate, n, channel=0)
+        if iq is not None:
+            installed = set(dsp.available_decoders())
+            cls = ptt_classifier.classify_ptt(iq, rate, center_hz=body.frequency_hz,
+                                                installed_decoders=installed)
+            if cls.get("ok"):
+                v = cls["verdict"]
+                mode = v["audio_mode"]
+                auto = {"verdict": v, "evidence": cls.get("evidence"),
+                          "decoder_available": cls.get("decoder_available"),
+                          "fallback_decoder": cls.get("fallback_decoder"),
+                          "candidates": [{"ptt_id": c["ptt_id"], "label": c["label"],
+                                           "score": c["score"], "decoder": c["decoder"],
+                                           "decoder_installed": (c["decoder"] in installed or c["decoder"] == "builtin")}
+                                          for c in cls.get("candidates", [])[:5]]}
+    result = dsp.start_audio_decode(dev.public(), body.frequency_hz, mode)
+    if auto is not None:
+        result["auto_detected"] = auto
+    # Open a tagged audio recording session for the listen. The decoder runs
+    # in an external process and may write its own .wav, so we capture
+    # metadata + a placeholder file path so /df/recordings surfaces the
+    # session regardless. Decoder-side audio can be pointed at the same path.
+    try:
+        from app.core import audio_capture
+        rec = audio_capture.open_session(
+            sample_rate_hz=int(result.get("sample_rate_hz") or 48000),
+            frequency_hz=float(body.frequency_hz),
+            mode=str(body.mode),
+            device_id=device_id,
+            observer={"lat": dev.lat, "lon": dev.lon, "callsign": dev.name},
+            tags=[result.get("status", "started")],
+        )
+        rec.close()
+        result["recording_meta"] = str(rec.meta_path)
+        result["recording_wav"] = str(rec.wav_path)
+    except Exception as e:
+        # Recording is best-effort — never block the demod start.
+        log.warning("audio_capture session failed: %s", e)
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────

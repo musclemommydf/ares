@@ -15,7 +15,12 @@
 import L from 'leaflet'
 import ms from 'milsymbol'
 
-const MilSymbol = ms.Symbol
+// milsymbol 3.x ships its default export as an object with a `Symbol`
+// constructor (alongside helpers like setColorMode / addSymbolPart). Some
+// bundlers/CDNs ESM-default-interop a different shape, so we look in both
+// likely places — the named `ms.Symbol` first, and the default itself if it
+// looks like a constructor.
+const MilSymbol = (ms && ms.Symbol) || ms
 
 // SIDC affiliation digit (position 2): F = friend, H = hostile, N = neutral,
 // U = unknown, P = pending, A = assumed friend, S = suspect
