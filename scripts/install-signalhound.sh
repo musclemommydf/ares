@@ -7,12 +7,16 @@
 # added after the rest of Ares is already installed.
 #
 # Usage:
-#   sudo ARES_SIGNALHOUND_SDK=/path/to/extracted/sdk ./scripts/install-signalhound.sh
-# or:
-#   sudo ./scripts/install-signalhound.sh /path/to/extracted/sdk
+#   sudo ./scripts/install-signalhound.sh
+#       Auto-detects the SDK in $ARES_SIGNALHOUND_SDK, ~/Downloads,
+#       ~/signalhound-sdk/, ./vendor/signalhound/, /opt/signalhound,
+#       and a few other system-wide spots. Auto-extracts a
+#       signal_hound_sdk_*.zip if it finds one.
 #
-# The path may point at either the zip's extraction parent dir or the
-# signal_hound_sdk/ dir itself — both are auto-detected.
+#   sudo ./scripts/install-signalhound.sh /path/to/sdk_zip_or_dir
+#   sudo ARES_SIGNALHOUND_SDK=/path/to/sdk_zip_or_dir ./scripts/install-signalhound.sh
+#       Same, but with an explicit override. The path may be a .zip file,
+#       the zip's extraction parent dir, or the signal_hound_sdk/ dir itself.
 #
 # What it does (works on apt + dnf systems):
 #   1. Picks the per-arch (linux_x64 / aarch64) and per-distro (Red Hat 8 /
@@ -28,16 +32,74 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-SDK_INPUT="${1:-${ARES_SIGNALHOUND_SDK:-}}"
-[ -n "$SDK_INPUT" ] || { echo "usage: sudo ARES_SIGNALHOUND_SDK=<sdk-dir> $0   (or pass the dir as arg 1)"; exit 1; }
-[ -d "$SDK_INPUT" ] || { echo "[!] not a directory: $SDK_INPUT"; exit 1; }
 [ "$(id -u)" = "0" ] || { echo "[!] this script writes to /usr/local and /etc/udev — run with sudo."; exit 1; }
 
 log()  { echo "[*] $*"; }
 ok()   { echo "[✓] $*"; }
 warn() { echo "[!] $*"; }
 
-# ── 1. Locate the SDK root that contains device_apis/. ───────────────────────
+# ── 1. Locate (or auto-discover + extract) a SignalHound SDK. ────────────────
+# Accept an explicit arg, an env var, OR auto-discover from the realistic places
+# the SDK might live on this machine. A discovered .zip is auto-extracted into
+# the ares cache so the rest of the script can walk it as a directory.
+SDK_INPUT="${1:-${ARES_SIGNALHOUND_SDK:-}}"
+
+# Auto-discover if no explicit path was given.
+if [ -z "$SDK_INPUT" ]; then
+    sh_home_dirs=()
+    if [ -n "${SUDO_USER:-}" ]; then
+        _su_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+        [ -n "$_su_home" ] && sh_home_dirs+=("$_su_home")
+    fi
+    [ -n "${HOME:-}" ] && sh_home_dirs+=("$HOME")
+    sh_cache_root="${XDG_CACHE_HOME:-${sh_home_dirs[0]:-/root}/.cache}/ares-sdr/signalhound-sdk"
+
+    for h in "${sh_home_dirs[@]}"; do
+        for d in "$h/signalhound-sdk/signal_hound_sdk" "$h/signalhound-sdk" \
+                 "$h/Downloads/signal_hound_sdk" "$h/Downloads"/signal_hound_sdk_*; do
+            if [ -d "$d/device_apis" ] || [ -d "$d/signal_hound_sdk/device_apis" ]; then
+                SDK_INPUT="$d"; break 2
+            fi
+        done
+        _zip="$(ls -1t "$h/Downloads"/signal_hound_sdk*.zip 2>/dev/null | head -1)"
+        if [ -n "$_zip" ] && [ -f "$_zip" ]; then
+            if command -v unzip >/dev/null 2>&1; then
+                log "Auto-extracting $_zip → $sh_cache_root ..."
+                rm -rf "$sh_cache_root"; mkdir -p "$sh_cache_root"
+                if unzip -q "$_zip" -d "$sh_cache_root"; then
+                    SDK_INPUT="$sh_cache_root"; break
+                fi
+            else
+                warn "Found $_zip but unzip isn't installed — install 'unzip' and re-run."
+            fi
+        fi
+    done
+    # Repo-vendored + system-wide locations.
+    if [ -z "$SDK_INPUT" ]; then
+        _here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        for d in "$_here/vendor/signalhound" /opt/signalhound /opt/signal_hound_sdk \
+                 /usr/local/share/signalhound /usr/local/share/signal_hound_sdk; do
+            if [ -d "$d/device_apis" ] || [ -d "$d/signal_hound_sdk/device_apis" ]; then
+                SDK_INPUT="$d"; break
+            fi
+        done
+    fi
+fi
+
+[ -n "$SDK_INPUT" ] || { echo "usage: sudo $0 [/path/to/sdk_zip_or_dir]   (or set ARES_SIGNALHOUND_SDK; or drop the zip in ~/Downloads)"; exit 1; }
+
+# If the input is a .zip file, extract it on the fly.
+if [ -f "$SDK_INPUT" ] && [[ "$SDK_INPUT" == *.zip ]]; then
+    sh_cache_root="${sh_cache_root:-${XDG_CACHE_HOME:-$HOME/.cache}/ares-sdr/signalhound-sdk}"
+    command -v unzip >/dev/null 2>&1 || { echo "[!] unzip not installed."; exit 1; }
+    log "Extracting $SDK_INPUT → $sh_cache_root ..."
+    rm -rf "$sh_cache_root"; mkdir -p "$sh_cache_root"
+    unzip -q "$SDK_INPUT" -d "$sh_cache_root" || { echo "[!] unzip failed."; exit 1; }
+    SDK_INPUT="$sh_cache_root"
+fi
+[ -d "$SDK_INPUT" ] || { echo "[!] not a directory: $SDK_INPUT"; exit 1; }
+
+# Locate device_apis/ — accept either the extraction parent or the inner dir.
 SH_ROOT=""
 for cand in "$SDK_INPUT" "$SDK_INPUT/signal_hound_sdk"; do
     [ -d "$cand/device_apis" ] && SH_ROOT="$cand" && break

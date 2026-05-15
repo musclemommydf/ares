@@ -779,27 +779,39 @@ fi
 # SignalHound radios use a proprietary closed-source vendor API: libbb_api.so
 # for the BB-series spectrum analyzers, libsm_api.so for the SM-series. The
 # headers + .so files are a free download from signalhound.com but we cannot
-# redistribute them. This block does everything that is automatable:
+# redistribute them. This block automates *everything else*:
 #
-#   1. Drop a udev rule for the SignalHound USB vendor (0x2817) so the user
+#   1. Find a SignalHound SDK on this machine — check $ARES_SIGNALHOUND_SDK,
+#      ~/Downloads (the usual place after a browser download — auto-extract
+#      signal_hound_sdk_*.zip if found), ./vendor/signalhound/, and a few
+#      system-wide locations. If the user runs ./install.sh as root via sudo
+#      we also look in $SUDO_USER's ~/Downloads.
+#   2. Drop a udev rule for the SignalHound USB vendor (0x2817) so the user
 #      can claim the device without sudo (relies on plugdev membership from 4a^).
-#   2. If ARES_SIGNALHOUND_SDK=<dir> is set (point it at an extracted
-#      signal_hound_sdk_<date>.zip), copy libbb_api.so* / libsm_api.so* and
-#      the matching headers into /usr/local/{lib,include}.
-#   3. If the vendor libs are present (either from step 2, or because the user
-#      already ran SignalHound's own install.sh), source-build the community
-#      SoapySignalHound module — that's the bridge that makes the radio show
-#      up in Ares' SDR console.
-#   4. If neither happened, print explicit instructions and skip the build.
+#   3. Stage libbb_api.so* / libsm_api.so* + the bundled libftd2xx.so + the
+#      matching headers into /usr/local/{lib,include}, picking the right
+#      per-arch (linux_x64 / aarch64) and per-distro (Red Hat 8 / Ubuntu 18.04
+#      / …) folder for THIS host.
+#   4. Run ldconfig + create the unversioned dev-link names (libbb_api.so →
+#      libbb_api.so.5) that the SoapySignalHound CMake find_library expects.
+#   5. Source-build the community SoapySignalHound module — that's the bridge
+#      that makes the radio show up in Ares' SDR console.
+#   6. If no SDK was found, print explicit instructions and skip the build.
 #
 # Works the same on Debian/Ubuntu apt and Rocky/RHEL dnf — the underlying
 # build is just cmake against libsoapysdr-dev + the vendor libs.
 if [ "$WITH_SIGNALHOUND" = "true" ] && [ "$OS" = "Linux" ] && have_pkg_mgr; then
     log "Configuring SignalHound SDR support (BB60C/D, SM200A/B/C, SA44/124, TG124A)..."
 
+    # `unzip` is needed for auto-extracting a signal_hound_sdk_*.zip from
+    # ~/Downloads. apt + dnf both have a `unzip` package by the same name.
+    apt_install unzip 2>/dev/null || true
+
     # ── 1. udev rule ────────────────────────────────────────────────────────
     # Match the whole SignalHound vendor namespace so a future product ID just
-    # works without us having to maintain a per-model list.
+    # works without us having to maintain a per-model list. (If we later find
+    # the vendor's own sh_usb.rules inside the SDK, it gets installed over the
+    # top — same VID match, but treating the vendor file as canonical.)
     if [ ! -f /etc/udev/rules.d/99-signalhound.rules ]; then
         maybe_sudo bash -c 'cat > /etc/udev/rules.d/99-signalhound.rules' <<'EOF'
 # Ares — SignalHound SDRs (vendor 0x2817).
@@ -809,6 +821,73 @@ EOF
         maybe_sudo udevadm control --reload-rules 2>/dev/null || true
         maybe_sudo udevadm trigger 2>/dev/null || true
         ok "Wrote /etc/udev/rules.d/99-signalhound.rules"
+    fi
+
+    # ── 1b. Auto-discover a SignalHound SDK on this machine ─────────────────
+    # If ARES_SIGNALHOUND_SDK isn't set, search the realistic places the user
+    # might have left the SDK after downloading from signalhound.com:
+    #   - $HOME/Downloads (and $SUDO_USER's Downloads if running via sudo)
+    #   - $HOME/signalhound-sdk (where our standalone script extracts to)
+    #   - ./vendor/signalhound/ inside the repo (for an air-gapped bundle)
+    #   - /opt/signalhound, /usr/local/share/signalhound (system-wide installs)
+    # We accept either an already-extracted dir (containing device_apis/) or a
+    # signal_hound_sdk_*.zip we'll auto-extract into the cache.
+    if [ -z "${ARES_SIGNALHOUND_SDK:-}" ]; then
+        # Build the list of $HOME-like dirs to scan.
+        sh_home_dirs=()
+        if [ -n "${SUDO_USER:-}" ]; then
+            _su_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+            [ -n "$_su_home" ] && sh_home_dirs+=("$_su_home")
+        fi
+        [ -n "${HOME:-}" ] && sh_home_dirs+=("$HOME")
+
+        sh_cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/ares-sdr/signalhound-sdk"
+
+        # Try each candidate location in priority order.
+        for h in "${sh_home_dirs[@]}"; do
+            # (a) Already-extracted dir under $HOME (most likely if the user
+            # ran our standalone script earlier, or unzipped manually).
+            for d in "$h/signalhound-sdk/signal_hound_sdk" "$h/signalhound-sdk" \
+                     "$h/Downloads/signal_hound_sdk" "$h/Downloads"/signal_hound_sdk_*; do
+                if [ -d "$d/device_apis" ] || [ -d "$d/signal_hound_sdk/device_apis" ]; then
+                    ARES_SIGNALHOUND_SDK="$d"; break 2
+                fi
+            done
+            # (b) Zip in ~/Downloads — pick the newest signal_hound_sdk_*.zip
+            # and auto-extract into the cache.
+            _zip="$(ls -1t "$h/Downloads"/signal_hound_sdk*.zip 2>/dev/null | head -1)"
+            if [ -n "$_zip" ] && [ -f "$_zip" ]; then
+                if command -v unzip >/dev/null 2>&1; then
+                    log "Auto-extracting $_zip → $sh_cache_root ..."
+                    rm -rf "$sh_cache_root"; mkdir -p "$sh_cache_root"
+                    if unzip -q "$_zip" -d "$sh_cache_root"; then
+                        ARES_SIGNALHOUND_SDK="$sh_cache_root"; break
+                    else
+                        warn "unzip failed on $_zip — see if the archive is intact."
+                    fi
+                else
+                    warn "Found $_zip but unzip isn't installed — install 'unzip' and re-run."
+                fi
+            fi
+        done
+        # (c) Repo-vendored layout. Air-gapped bundles can drop the unzipped
+        # SDK at ./vendor/signalhound/ to make the install fully offline.
+        if [ -z "${ARES_SIGNALHOUND_SDK:-}" ] && [ -d "$SCRIPT_DIR/vendor/signalhound" ]; then
+            ARES_SIGNALHOUND_SDK="$SCRIPT_DIR/vendor/signalhound"
+        fi
+        # (d) System-wide installs (someone already ran the vendor's install.sh
+        # to /opt or /usr/local/share).
+        if [ -z "${ARES_SIGNALHOUND_SDK:-}" ]; then
+            for d in /opt/signalhound /opt/signal_hound_sdk \
+                     /usr/local/share/signalhound /usr/local/share/signal_hound_sdk \
+                     /var/cache/signalhound; do
+                if [ -d "$d/device_apis" ] || [ -d "$d/signal_hound_sdk/device_apis" ]; then
+                    ARES_SIGNALHOUND_SDK="$d"; break
+                fi
+            done
+        fi
+        [ -n "${ARES_SIGNALHOUND_SDK:-}" ] && \
+            ok "Auto-discovered SignalHound SDK at: $ARES_SIGNALHOUND_SDK"
     fi
 
     # ── 2. Vendor lib detection / staging from ARES_SIGNALHOUND_SDK ─────────
@@ -1007,17 +1086,25 @@ EOF
         cat <<'EOF'
 
 [!] SignalHound vendor SDK not detected. The SDR will not appear in Ares yet.
-    The vendor API is closed-source and not in any distro repo — install it once:
+    The vendor API is closed-source and not in any distro repo, so we can't
+    ship it with the installer — but the install is now zero-effort once you
+    have the zip on the machine:
 
       1. Download the SDK (free, no auth required) from:
             https://signalhound.com/support/product-downloads-prdct-signal-hound/
-         Pick your model → "Linux software" / "API" / "SDK", grab the zip.
-      2. Extract somewhere, then re-run THIS installer pointed at the extracted dir:
-            ARES_SIGNALHOUND_SDK=/path/to/extracted/sdk ./install.sh
-         (Or run their own install.sh — it drops libs into /usr/local/lib —
-         and then re-run THIS installer with no extra args.)
-      3. The next pass will build the SoapySignalHound bridge automatically and
-         the radio will appear in Ares' SDR console on the next launch.
+         Pick your model → "Linux software" / "API" / "SDK". Save it to
+         ~/Downloads/ (the default browser destination — that's where we look).
+      2. Re-run THIS installer with no extra args:
+            ./install.sh
+         It auto-discovers the zip in ~/Downloads, auto-extracts it into
+         the cache, picks the right per-arch + per-distro libs, and builds
+         the SoapySignalHound bridge.
+      3. The radio appears in Ares' SDR console on the next launch.
+
+    Already have it somewhere else? Override the search:
+        ARES_SIGNALHOUND_SDK=/path/to/sdk_or_zip_dir ./install.sh
+    Or use the standalone helper after the rest of Ares is installed:
+        sudo ./scripts/install-signalhound.sh ~/Downloads
 
 EOF
     fi
