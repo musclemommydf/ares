@@ -1,20 +1,20 @@
-import { Undo2, Redo2, Archive, Save, FolderOpen, Upload, Trash2, HelpCircle } from 'lucide-react'
+import { Undo2, Redo2, Save, FolderOpen, Upload, Trash2, HelpCircle } from 'lucide-react'
 
 const HDR = { fontSize: 10, color: '#484f58', padding: '3px 14px', letterSpacing: 0.7, fontWeight: 600 }
 const SEP = { height: 1, background: '#21262d', margin: '4px 0' }
 
 /**
- * The header hamburger dropdown — Edit (undo/redo) · Analysis Tools (propagation
- * mode only) · File. App owns the positioned wrapper, the hamburger button and the
- * outside-click close; this component is just the menu body (renders nothing when closed).
+ * The header hamburger dropdown — Edit (undo/redo) · File. App owns the
+ * positioned wrapper, the hamburger button and the outside-click close; this
+ * component is just the menu body (renders nothing when closed).
  *
- * Draw Bounds now lives in the map's drawing-tools (✎) dropdown; Interference
- * Analysis and Super Layer moved into the Emitter Summary panel.
+ * Former Analysis Tools have all moved to where they're used: Draw Bounds → the
+ * map's ✎ drawing-tools dropdown; Interference Analysis + Super Layer → the
+ * Emitter Summary panel; saved results → the Layer Manager ("Saved results").
  */
 export default function OverflowMenu({
-  open, onClose, mainMode,
+  open, onClose,
   canUndo, canRedo, undoTick, onUndo, onRedo,
-  onOpenArchive,
   onSaveState, onLoadState, onImport, onPurgeCache, onOpenHelp,
 }) {
   if (!open) return null
@@ -38,14 +38,6 @@ export default function OverflowMenu({
       </button>
       {/* read undoTick so the disabled state stays in sync */}
       <span style={{ display: 'none' }}>{undoTick}</span>
-
-      {mainMode === 'propagation' && <>
-        <div style={SEP} />
-        <div style={HDR}>ANALYSIS TOOLS</div>
-        <button className="overflow-menu-item" onClick={onOpenArchive}>
-          <Archive size={13} /> Archive
-        </button>
-      </>}
 
       <div style={SEP} />
       <div style={HDR}>FILE</div>

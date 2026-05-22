@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } fro
 import {
   Zap, Trash2, Menu, X, HelpCircle, Plus, Save, FolderOpen,
   Route, MapPin, Square, Hexagon, Radio, Layers, GitMerge, Network,
-  Archive, Scan, RefreshCw, Crosshair, Upload, Server, Globe,
+  Scan, RefreshCw, Crosshair, Upload, Server, Globe,
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
   Undo2, Redo2,
 } from 'lucide-react'
@@ -45,7 +45,6 @@ import TerrainTab from './components/Panels/TerrainTab'
 import BottomPanelContent from './components/Panels/BottomPanelContent'
 import HelpPanel from './components/Common/HelpPanel'
 import DecibelCalculator from './components/Tools/DecibelCalculator'
-import ArchivePanel from './components/Tools/ArchivePanel'
 import ManetPanel from './components/Tools/ManetPanel'
 import GeoLocationPanel from './components/Geolocation/GeoLocationPanel'
 import LoBList from './components/Geolocation/LoBList'
@@ -225,9 +224,6 @@ export default function App() {
   // ── Bottom panel resize ───────────────────────────────────────────────────
   const { bottomPanelHeight, setBottomPanelHeight, handleResizeMouseDown } =
     useBottomPanelResize(_s?.ui?.bottomPanelHeight ?? 240, bottomTab)
-
-  // ── Archive ───────────────────────────────────────────────────────────────
-  const [archiveOpen, setArchiveOpen] = useState(false)
 
   // ── Emitter placement ────────────────────────────────────────────────────
   const [txActive, setTxActive] = useState(false)  // true once user places an emitter via right-click
@@ -1468,13 +1464,17 @@ export default function App() {
     }
   }, [tx, propagation, upsertLayer])
 
-  // ── Archive load ──────────────────────────────────────────────────────────
-  const handleArchiveLoad = useCallback((entry) => {
-    if (entry.geojson) {
-      upsertLayer(`archive_${entry.id}`, entry.geojson, '#a855f7')
-      toast.success(`Loaded "${entry.name}" from archive`)
-    }
-    setArchiveOpen(false)
+  // ── Saved-result load ───────────────────────────────────────────────────
+  // Reproduces the snapshot: restore the settings that produced it (tab / TX /
+  // propagation) and re-render the result through the signal-coloured overlay
+  // path, so it looks the same as a freshly-run simulation.
+  const handleLoadSavedResult = useCallback((entry) => {
+    const p = entry.params || {}
+    if (p.type) { setMainMode('propagation'); setActiveTab(p.type) }
+    if (p.tx) setTx(prev => ({ ...prev, ...p.tx }))
+    if (p.propagation) setPropagation(prev => ({ ...prev, ...p.propagation }))
+    if (entry.geojson) upsertLayer(`saved_${entry.id}`, entry.geojson, '#a855f7')
+    toast.success(`Loaded "${entry.name}" — settings restored`)
   }, [upsertLayer])
 
   // ── Cache purge ───────────────────────────────────────────────────────────
@@ -1512,10 +1512,10 @@ export default function App() {
     null
   )
 
-  // ── Current geojson for archive ───────────────────────────────────────────
-  const currentGeojsonForArchive = coverageGeoJSON ||
+  // ── Current result snapshot (for the Layer Manager → Saved Results) ────────
+  const currentResultGeojson = coverageGeoJSON ||
     extraGeojsonLayers.slice(-1)[0]?.geojson || null
-  const currentParamsForArchive = { type: activeTab, tx, propagation }
+  const currentResultParams = { type: activeTab, tx, propagation }
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -1540,13 +1540,11 @@ export default function App() {
           <OverflowMenu
             open={menuOpen}
             onClose={() => setMenuOpen(false)}
-            mainMode={mainMode}
             canUndo={undoStackRef.current.length > 0}
             canRedo={redoStackRef.current.length > 0}
             undoTick={undoTick}
             onUndo={undo}
             onRedo={redo}
-            onOpenArchive={() => setArchiveOpen(true)}
             onSaveState={handleSaveState}
             onLoadState={handleLoadState}
             onImport={() => mapImportApiRef.current?.openFileDialog?.()}
@@ -1587,8 +1585,6 @@ export default function App() {
         mapCenter={{ lat: tx.lat, lon: tx.lon }}
         sdrPanelOpen={sdrPanelOpen} onCloseSdr={() => setSdrPanelOpen(false)} sdr={sdrStream}
         sdrHidden={sdrPicking} onSdrPickLocation={requestSdrLocationPick} sdrMapFeatures={sdrMapFeatures}
-        archiveOpen={archiveOpen} onCloseArchive={() => setArchiveOpen(false)}
-        currentGeojson={currentGeojsonForArchive} currentParams={currentParamsForArchive} onArchiveLoad={handleArchiveLoad}
       />
       {sdrPicking && (
         <div style={{ position: 'fixed', top: 64, left: '50%', transform: 'translateX(-50%)', zIndex: 3000,
@@ -1624,6 +1620,7 @@ export default function App() {
                 }}
                 onOpenSaveStateDialog={() => setSaveStateDialogOpen(true)}
                 onLoadFullState={handleLoadState}
+                currentGeojson={currentResultGeojson} currentParams={currentResultParams} onLoadResult={handleLoadSavedResult}
               />
             </div>
           </div>

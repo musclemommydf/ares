@@ -10,6 +10,7 @@
 import { useMemo, useRef, useState } from 'react'
 import RegionDownloadPanel from './RegionDownloadPanel'
 import OsintFeedsPanel from './OsintFeedsPanel'
+import SavedResultsPanel from './SavedResultsPanel'
 
 const KIND_LABELS = {
   geojson: 'Vector',
@@ -42,10 +43,13 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
                                             incomingBbox, onConsumeBbox, onRequestDrawBbox,
                                             // Full-app state save/load (duplicated from File menu) — Save opens the
                                             // section-selector dialog so the user can choose what to include.
-                                            onOpenSaveStateDialog, onLoadFullState }) {
+                                            onOpenSaveStateDialog, onLoadFullState,
+                                            // Saved Results catalog (localStorage snapshots of simulation results).
+                                            currentGeojson, currentParams, onLoadResult }) {
   const [kindFilter, setKindFilter] = useState(new Set(ALL_KINDS))
   const [tileFormOpen, setTileFormOpen] = useState(false)
   const [osintOpen, setOsintOpen] = useState(false)
+  const [savedOpen, setSavedOpen] = useState(false)
   const [tileForm, setTileForm] = useState({
     name: '', url: '', type: 'xyz', minZoom: 0, maxZoom: 18,
     attribution: '', wmsLayers: '',
@@ -164,6 +168,13 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
           onClick={() => setOsintOpen(o => !o)}>
           🛰 OSINT feeds
         </button>
+        {onLoadResult && (
+          <button className={`btn ${savedOpen ? 'btn-primary' : 'btn-ghost'}`} style={{ fontSize: 11, padding: '4px 10px' }}
+            title="Save the current simulation result, or reload a saved one (restores its settings + result)"
+            onClick={() => setSavedOpen(o => !o)}>
+            🗂 Saved results
+          </button>
+        )}
         <div style={{ width: 1, height: 18, background: '#30363d', margin: '0 2px' }} />
         <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 10px' }}
           title="Save just the layers in this panel — KMZ / GeoJSON / imagery / tiles / DTED / drawings."
@@ -217,6 +228,11 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
 
       {/* Live OSINT feeds → toggleable map layers (collapsed by default) */}
       {osintOpen && <OsintFeedsPanel ul={ul} />}
+
+      {/* Saved Results — localStorage snapshots of simulation results (collapsed by default) */}
+      {savedOpen && onLoadResult && (
+        <SavedResultsPanel currentGeojson={currentGeojson} currentParams={currentParams} onLoad={onLoadResult} />
+      )}
 
       {/* Tile source form */}
       {tileFormOpen && (
