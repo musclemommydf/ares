@@ -47,6 +47,10 @@ _FREQ_BUCKET_HZ = 5_000.0      # group LoBs into 5 kHz bins for matching
 _DEFAULT_LOB_TTL_S = 90.0      # an LoB stops contributing to fixes after this
 _AUTO_COVERAGE_COOLDOWN_S = 8.0
 _SPECTRUM_DRIVER_TTL_S = 12.0  # close an idle on-demand spectrum driver after this
+# A live-DF adapter reads these only at construction (metadata → driver/geometry/
+# solver), so changing any of them via update() requires re-spawning the adapter.
+_LIVE_RESPAWN_KEYS = {"metadata", "channels", "array_type", "array_spacing_wavelengths",
+                      "frequency_hz", "source_class"}
 
 
 def _welch_psd_per_ch(X, n_bins: int) -> list:
@@ -319,6 +323,7 @@ class SDRManager:
                              "gain": "<unset>", "cache": None, "cache_t": 0.0, "cache_key": None}
                     self._spectrum_drivers[device_id] = entry
                 drv, backend = entry["driver"], entry["backend"]
+                entry["last_used"] = time.time()   # keep warm even when synthetic, so we don't re-probe each poll
                 if backend == "synthetic":
                     return None               # nothing real to show — let the synthetic path label it
                 rate = float(md.get("sample_rate_hz") or max(2.4e6, span_hz))
@@ -329,7 +334,6 @@ class SDRManager:
                     drv.set_frequency(center_hz); entry["freq"] = center_hz
                 if gain is not None and entry["gain"] != gain:
                     drv.set_gain(float(gain)); entry["gain"] = gain
-                entry["last_used"] = time.time()
                 # reuse a fresh capture across the panel's parallel per-channel poll
                 key = (round(center_hz), round(rate), n_bins)
                 if not (entry["cache"] is not None and entry["cache_key"] == key
@@ -434,7 +438,12 @@ class SDRManager:
         self._save()
         # re-spawn on a state change that an adapter wouldn't pick up on its own
         if self._started:
-            if dev.enabled != was_enabled or "host" in patch or "port" in patch or "type" in patch:
+            structural = "host" in patch or "port" in patch or "type" in patch
+            if dev.type == "live_df":
+                # live-DF reads driver/geometry/solver from metadata at construction,
+                # so an Edit of those only takes effect after a re-spawn.
+                structural = structural or any(k in patch for k in _LIVE_RESPAWN_KEYS)
+            if dev.enabled != was_enabled or structural:
                 self._kill(device_id)
                 if dev.enabled:
                     self._spawn(dev)

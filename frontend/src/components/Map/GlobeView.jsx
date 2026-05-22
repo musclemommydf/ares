@@ -89,6 +89,7 @@ export default function GlobeView({
   dfObservers = [],                                      // [{ lat, lon, heading_deg, hpbw_deg, lobe_radius_m?, color?, label?, id? }]
                                                           // — DF antenna patterns rendered as Cesium lobes at observer positions
   gpsFix = null,                                         // {lat, lon, heading_deg?, source} — operator "you are here" marker
+  gpsTrackers = [],                                       // [{id,name,type,status}] SDRs pinned to the GPS fix (shown on the marker)
 }) {
   const containerRef = useRef(null)
   const viewerRef = useRef(null)
@@ -945,12 +946,24 @@ export default function GlobeView({
       }
     }
 
-    // operator GPS — "you are here"
+    // operator GPS — "you are here" (label shows the SDR count; click for the list)
     if (gpsFix && typeof gpsFix.lat === 'number' && typeof gpsFix.lon === 'number') {
       const gp = Cesium.Cartesian3.fromDegrees(gpsFix.lon, gpsFix.lat)
-      ds.entities.add({ position: gp,
+      const trk = gpsTrackers || []
+      const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+      const countTxt = trk.length ? ` · ${trk.length} SDR${trk.length > 1 ? 's' : ''}` : ''
+      const desc = `<div style="font:12px sans-serif;color:#cde">`
+        + `<div><b>You — GPS</b> (${esc(gpsFix.source || 'manual')}${gpsFix.heading_deg != null ? ` · hdg ${Math.round(gpsFix.heading_deg)}°` : ''})</div>`
+        + `<div>${gpsFix.lat.toFixed(5)}, ${gpsFix.lon.toFixed(5)}</div>`
+        + (trk.length
+            ? `<div style="margin-top:6px">SDRs pinned to this GPS:</div><ul style="margin:3px 0 0 16px;padding:0">`
+              + trk.map(t => `<li>${esc(t.name || t.id)} <span style="opacity:0.6">(${esc(t.type)}${t.status && t.status !== 'streaming' ? ` · ${esc(t.status)}` : ''})</span></li>`).join('')
+              + `</ul>`
+            : `<div style="margin-top:6px;opacity:0.7">No SDRs are using this GPS fix.</div>`)
+        + `</div>`
+      ds.entities.add({ position: gp, description: desc,
         point: { pixelSize: 11, color: Cesium.Color.fromCssColorString('#22d3ee'), outlineColor: Cesium.Color.WHITE, outlineWidth: 2, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND },
-        label: { text: `▲ you (${gpsFix.source || 'GPS'})`, font: '11px sans-serif', fillColor: Cesium.Color.WHITE, showBackground: true,
+        label: { text: `▲ you (${gpsFix.source || 'GPS'})${countTxt}`, font: '11px sans-serif', fillColor: Cesium.Color.WHITE, showBackground: true,
                  backgroundColor: Cesium.Color.fromCssColorString('#0e3a44').withAlpha(0.85), pixelOffset: new Cesium.Cartesian2(0, -16), heightReference: Cesium.HeightReference.CLAMP_TO_GROUND } })
       if (typeof gpsFix.heading_deg === 'number') {
         const [hlat, hlon] = [gpsFix.lat + 0.0009 * Math.cos(gpsFix.heading_deg * Math.PI / 180), gpsFix.lon + 0.0009 * Math.sin(gpsFix.heading_deg * Math.PI / 180) / Math.max(0.05, Math.cos(gpsFix.lat * Math.PI / 180))]
@@ -959,7 +972,7 @@ export default function GlobeView({
     }
     requestRenderRef.current()
     return () => { cancelled = true }
-  }, [extraGeojsonLayers, tx, rxPoint, antennaAzimuthDeg, antennaTiltDeg, antennaPattern, minSignalDbm, mapColors, ul?.drawnGeoJSON, ul?.globeDrawnGeoJSON, ul?.layers, extraTxList, geolocationGeoJSON, gpsFix])
+  }, [extraGeojsonLayers, tx, rxPoint, antennaAzimuthDeg, antennaTiltDeg, antennaPattern, minSignalDbm, mapColors, ul?.drawnGeoJSON, ul?.globeDrawnGeoJSON, ul?.layers, extraTxList, geolocationGeoJSON, gpsFix, gpsTrackers])
 
   const recenter = () => { const v = viewerRef.current; if (v && !v.isDestroyed()) { flyTo(v, center); requestRenderRef.current() } }
   const flyToLatLon = (lat, lon) => { const v = viewerRef.current; if (v && !v.isDestroyed()) { flyTo(v, { lat, lon }); requestRenderRef.current() } }

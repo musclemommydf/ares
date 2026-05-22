@@ -14,14 +14,14 @@
  * pipeline (no map code changes needed).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { X, Plus, RefreshCw, Trash2, Wifi, WifiOff, AlertCircle, Activity, Radio, Save, Cpu, Network, Crosshair, Terminal, Copy } from 'lucide-react'
+import { X, Plus, RefreshCw, Trash2, Wifi, WifiOff, AlertCircle, Activity, Radio, Save, Cpu, Network, Crosshair, Terminal, Copy, Pencil } from 'lucide-react'
 import CellularPanel from './CellularPanel'
 import {
   listSdrDevices, createSdrDevice, updateSdrDevice, deleteSdrDevice, testSdrDevice,
   getDfAccuracyEstimate, getGpsFix, setGpsFix,
   getGpsSource, setGpsSource, getDfIqBackend,
   addSdrPeer, removeSdrPeer, getSdrPeers,
-  getDfDrivers, startLiveDf, dfAntennas, dfSaveAntenna, dfDeleteAntenna, dfArrayEstimate, dfLiveCalibrate,
+  getDfDrivers, startLiveDf, updateLiveDf, dfAntennas, dfSaveAntenna, dfDeleteAntenna, dfArrayEstimate, dfLiveCalibrate,
   listSdrNics, createSdrNic, deleteSdrNic,
 } from '../../api/client'
 
@@ -112,11 +112,13 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
   const [adding, setAdding] = useState(false)
   const [addChooser, setAddChooser] = useState(false)    // unified "Add device" → pick a role/mode
   const [form, setForm] = useState(() => blankForm(mapCenter))
+  const [editId, setEditId] = useState(null)             // editing an external-pipeline device (else null = adding)
   const [accEst, setAccEst] = useState(null)
   // ── live-DF (built-in driver → in-process bearing) ──
   const [drivers, setDrivers] = useState([])              // /df/drivers registry
   const [liveAdding, setLiveAdding] = useState(false)
   const [liveForm, setLiveForm] = useState(() => blankLiveForm(mapCenter))
+  const [editLiveId, setEditLiveId] = useState(null)     // editing a live-DF device (else null = adding)
   const [liveAccEst, setLiveAccEst] = useState(null)
   const [methodHelp, setMethodHelp] = useState(false)    // expand the DF-method comparison
   const [antennas, setAntennas] = useState([])           // /df/antennas catalog (ALARIS + others)
@@ -187,14 +189,21 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
 
   const submit = async () => {
     setErrText(null)
+    const payload = { ...form, port: Number(form.port) || 0, lat: Number(form.lat) || 0, lon: Number(form.lon) || 0,
+      frequency_hz: Number(form.frequency_hz) || 0, channels: Number(form.channels) || (form.source_class === 'single_channel' ? 1 : 5),
+      array_spacing_wavelengths: Number(form.array_spacing_wavelengths) || 0.4,
+      antenna_heading_deg: Number(form.antenna_heading_deg) || 0, df_threshold_dbm: Number(form.df_threshold_dbm) || -90 }
     try {
-      await createSdrDevice({ ...form, port: Number(form.port) || 0, lat: Number(form.lat) || 0, lon: Number(form.lon) || 0,
-        frequency_hz: Number(form.frequency_hz) || 0, channels: Number(form.channels) || (form.source_class === 'single_channel' ? 1 : 5),
-        array_spacing_wavelengths: Number(form.array_spacing_wavelengths) || 0.4,
-        antenna_heading_deg: Number(form.antenna_heading_deg) || 0, df_threshold_dbm: Number(form.df_threshold_dbm) || -90 })
-      setAdding(false)
+      if (editId) {
+        const { type, ...patch } = payload     // type is immutable on update
+        await updateSdrDevice(editId, patch)
+      } else {
+        await createSdrDevice(payload)
+      }
+      setAdding(false); setEditId(null)
       setForm(blankForm(mapCenter))
       const s = await listSdrDevices(); setDevices(s.devices || [])
+      setErrText(editId ? `✓ updated ${payload.name || editId}` : `✓ added ${payload.name}`)
     } catch (e) { setErrText(String(e?.response?.data?.detail || e?.message || e)) }
   }
 
@@ -239,36 +248,104 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
     const customPos = (f.array_type === 'custom' && f.custom_positions?.length >= 2)
       ? f.custom_positions.map(p => [Number(p[0]) || 0, Number(p[1]) || 0, Number(p[2]) || 0]) : null
     if (f.array_type === 'custom' && !customPos) { setErrText('custom array needs ≥2 elements — add element positions first'); return }
+    const body = {
+      driver_id: f.driver_id, name: f.name || `live-${f.driver_id}`,
+      frequency_hz: Number(f.frequency_mhz) * 1e6 || 0,
+      channels: customPos ? customPos.length : Math.max(2, Number(f.channels) || 2),
+      array_type: f.array_type, array_spacing_wavelengths: Number(f.array_spacing_wavelengths) || 0.4,
+      array_sense: f.array_sense !== false,
+      array_radius_m: f.array_radius_m ? Number(f.array_radius_m) : null,
+      array_positions_m: customPos,
+      sample_rate_hz: Number(f.sample_rate_mhz) * 1e6 || 2.4e6,
+      gain_db: f.gain_db === '' ? null : Number(f.gain_db),
+      method: f.method, dwell_s: Number(f.dwell_s) || 1.0,
+      antenna_heading_deg: Number(f.antenna_heading_deg) || 0,
+      lat: Number(f.lat) || 0, lon: Number(f.lon) || 0,
+      use_gps: f.use_gps,
+      min_snr_db: Number(f.min_snr_db), min_quality: Number(f.min_quality),
+      auto_squelch: f.auto_squelch, auto_calibrate: f.auto_calibrate,
+      cal_interval_s: Number(f.cal_interval_s) || 300,
+      vfos: (f.vfos || []).filter(v => v.offset_mhz !== '' && v.offset_mhz != null).map((v, i) => ({
+        name: v.name || `vfo${i}`, offset_hz: Number(v.offset_mhz) * 1e6 || 0,
+        bandwidth_hz: Number(v.bw_khz) * 1e3 || 0,
+        squelch_db: (v.squelch_db === '' || v.squelch_db == null) ? null : Number(v.squelch_db),
+      })),
+      driver_args,
+    }
     try {
-      const r = await startLiveDf({
-        driver_id: f.driver_id, name: f.name || `live-${f.driver_id}`,
-        frequency_hz: Number(f.frequency_mhz) * 1e6 || 0,
-        channels: customPos ? customPos.length : Math.max(2, Number(f.channels) || 2),
-        array_type: f.array_type, array_spacing_wavelengths: Number(f.array_spacing_wavelengths) || 0.4,
-        array_sense: f.array_sense !== false,
-        array_radius_m: f.array_radius_m ? Number(f.array_radius_m) : null,
-        array_positions_m: customPos,
-        sample_rate_hz: Number(f.sample_rate_mhz) * 1e6 || 2.4e6,
-        gain_db: f.gain_db === '' ? null : Number(f.gain_db),
-        method: f.method, dwell_s: Number(f.dwell_s) || 1.0,
-        antenna_heading_deg: Number(f.antenna_heading_deg) || 0,
-        lat: Number(f.lat) || 0, lon: Number(f.lon) || 0,
-        use_gps: f.use_gps,
-        min_snr_db: Number(f.min_snr_db), min_quality: Number(f.min_quality),
-        auto_squelch: f.auto_squelch, auto_calibrate: f.auto_calibrate,
-        cal_interval_s: Number(f.cal_interval_s) || 300,
-        vfos: (f.vfos || []).filter(v => v.offset_mhz !== '' && v.offset_mhz != null).map((v, i) => ({
-          name: v.name || `vfo${i}`, offset_hz: Number(v.offset_mhz) * 1e6 || 0,
-          bandwidth_hz: Number(v.bw_khz) * 1e3 || 0,
-          squelch_db: (v.squelch_db === '' || v.squelch_db == null) ? null : Number(v.squelch_db),
-        })),
-        driver_args,
-      })
-      setLiveAdding(false)
+      const r = editLiveId ? await updateLiveDf(editLiveId, body) : await startLiveDf(body)
+      setLiveAdding(false); setEditLiveId(null)
       setLiveForm(blankLiveForm(mapCenter))
       const s = await listSdrDevices(); setDevices(s.devices || [])
-      setErrText(`✓ live DF started on ${r.device?.name || f.driver_id}`)
+      setErrText(editLiveId ? `✓ live DF updated: ${r.device?.name || body.name}` : `✓ live DF started on ${r.device?.name || f.driver_id}`)
     } catch (e) { setErrText(String(e?.response?.data?.detail || e?.message || e)) }
+  }
+
+  // Open the appropriate add-form pre-filled with a device's current parameters,
+  // in edit mode — Save then PUTs an update (and re-spawns) instead of creating.
+  const openEditDevice = (d) => {
+    setErrText(null)
+    setAddChooser(false); setNicAdding(false)
+    if (d.type === 'live_df') {
+      const md = d.metadata || {}
+      const arr = md.array || {}
+      const isCustom = arr.type === 'custom' && Array.isArray(arr.positions_m)
+      setEditId(null); setAdding(false)
+      setLiveForm({
+        ...blankLiveForm(mapCenter),
+        driver_id: md.driver_id || 'plutosdr',
+        name: d.name || '',
+        uri: (md.driver_args && (md.driver_args.uri || md.driver_args.args)) || '',
+        antenna_id: '',
+        array_type: isCustom ? 'custom' : (arr.type === 'adcock' ? 'adcock' : (d.array_type || 'uca')),
+        array_sense: arr.sense !== false,
+        array_radius_m: arr.radius_m != null ? String(arr.radius_m) : '',
+        custom_positions: isCustom ? arr.positions_m.map(p => [p[0], p[1], p[2] || 0]) : [],
+        frequency_mhz: d.frequency_hz ? String(d.frequency_hz / 1e6) : '433.92',
+        channels: Math.max(2, Number(d.channels) || 2),
+        array_spacing_wavelengths: d.array_spacing_wavelengths ?? 0.4,
+        sample_rate_mhz: (Number(md.sample_rate_hz) || 2.4e6) / 1e6,
+        gain_db: md.gain_db == null ? '' : md.gain_db,
+        method: md.method || 'music',
+        dwell_s: md.dwell_s ?? 1.0,
+        antenna_heading_deg: d.antenna_heading_deg ?? 0,
+        min_snr_db: md.min_snr_db ?? 3,
+        min_quality: md.min_quality ?? 0.1,
+        auto_squelch: !!md.auto_squelch,
+        auto_calibrate: !!md.auto_calibrate,
+        cal_interval_s: md.cal_interval_s ?? 300,
+        vfos: (md.vfos || []).map((v, i) => ({
+          name: v.name || `vfo${i}`,
+          offset_mhz: v.offset_hz != null ? v.offset_hz / 1e6 : '',
+          bw_khz: v.bandwidth_hz != null ? v.bandwidth_hz / 1e3 : '',
+          squelch_db: v.squelch_db == null ? '' : v.squelch_db,
+        })),
+        lat: d.lat ?? mapCenter?.lat ?? 0,
+        lon: d.lon ?? mapCenter?.lon ?? 0,
+        use_gps: d.use_gps !== false,
+      })
+      setEditLiveId(d.id)
+      setLiveAdding(true)
+    } else {
+      setEditLiveId(null); setLiveAdding(false)
+      setForm({
+        ...blankForm(mapCenter),
+        name: d.name || '', type: d.type || 'generic', host: d.host || '', port: d.port || 0,
+        source_class: d.source_class || 'multi_channel',
+        channels: d.channels ?? 5,
+        array_type: d.array_type || 'uca',
+        array_spacing_wavelengths: d.array_spacing_wavelengths ?? 0.4,
+        azimuth_reference: (d.azimuth_reference === 'relative' || d.azimuth_reference === 'clock') ? 'relative' : 'true',
+        antenna_heading_deg: d.antenna_heading_deg ?? 0,
+        lat: d.lat ?? mapCenter?.lat ?? 0,
+        lon: d.lon ?? mapCenter?.lon ?? 0,
+        frequency_hz: d.frequency_hz ?? 0,
+        df_threshold_dbm: d.df_threshold_dbm ?? -90,
+        use_gps: d.use_gps !== false,
+      })
+      setEditId(d.id)
+      setAdding(true)
+    }
   }
 
   const submitNic = async () => {
@@ -435,6 +512,7 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
                     </label>
                     {calCapable && <button style={btn} title="Force coherence (re)calibration" onClick={() => calibrateDevice(d.id)}><Crosshair size={12} /></button>}
                     {d.type !== 'live_df' && <button style={btn} title="Probe TCP connection" onClick={() => probe(d.id)}><Activity size={12} /></button>}
+                    <button style={btn} title="Edit device parameters" onClick={() => openEditDevice(d)}><Pencil size={12} /></button>
                     <button style={btn} title="Remove device" onClick={() => remove(d.id)}><Trash2 size={12} color="#f85149" /></button>
                    </div>
                    {vstat?.length > 0 && (
@@ -454,10 +532,12 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
                 )})}
             {adding ? (
               <div style={{ marginTop: 8, padding: 10, background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, display: 'grid', gridTemplateColumns: 'auto 1fr auto 1fr', gap: 6, alignItems: 'center', fontSize: 12 }}>
+                {editId && <div style={{ gridColumn: '1 / -1', fontSize: 11, color: '#58a6ff' }}>Editing <strong>{form.name || editId}</strong> — saving re-applies these settings.</div>}
                 <span style={{ color: '#8b949e' }}>name</span>
                 <input style={inputStyle} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Kraken-1" />
                 <span style={{ color: '#8b949e' }}>type</span>
-                <select style={inputStyle} value={form.type} onChange={e => {
+                <select style={inputStyle} value={form.type} disabled={!!editId}
+                        title={editId ? 'device type is fixed — remove and re-add to change it' : ''} onChange={e => {
                   const v = e.target.value
                   if (v.startsWith('live:')) {
                     // a built-in driver (Pluto, USRP, …) → configure it in the Live DF
@@ -520,20 +600,20 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
                   <span style={{ gridColumn: '2 / -1', fontSize: 11, color: '#6e7681' }}>{accEst ? accEst.note : '…'}</span>
                 </>}
                 <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6, marginTop: 4 }}>
-                  <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} onClick={submit}><Save size={12} /> Save</button>
-                  <button style={btn} onClick={() => setAdding(false)}>Cancel</button>
+                  <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb' }} onClick={submit}><Save size={12} /> {editId ? 'Save changes' : 'Save'}</button>
+                  <button style={btn} onClick={() => { setAdding(false); setEditId(null) }}>Cancel</button>
                 </div>
               </div>
             ) : addChooser ? (
               <div style={{ marginTop: 8, padding: 10, background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <div style={{ fontSize: 11, color: '#8b949e' }}>What should this device do?</div>
                 <button style={{ ...btn, justifyContent: 'flex-start', textAlign: 'left' }}
-                        onClick={() => { setAddChooser(false); setLiveForm(blankLiveForm(mapCenter)); setLiveAdding(true) }}>
+                        onClick={() => { setAddChooser(false); setEditLiveId(null); setLiveForm(blankLiveForm(mapCenter)); setLiveAdding(true) }}>
                   <Cpu size={13} /> <span><strong>Direction finding — built-in driver</strong><br />
                     <span style={{ color: '#6e7681', fontSize: 10 }}>Ares pulls IQ off the radio (Pluto / USRP / Kraken / …) and runs MUSIC/Capon/Bartlett DF in-process. No external daemon.</span></span>
                 </button>
                 <button style={{ ...btn, justifyContent: 'flex-start', textAlign: 'left' }}
-                        onClick={() => { setAddChooser(false); setForm(blankForm(mapCenter)); setAdding(true) }}>
+                        onClick={() => { setAddChooser(false); setEditId(null); setForm(blankForm(mapCenter)); setAdding(true) }}>
                   <Radio size={13} /> <span><strong>Direction finding — external pipeline</strong><br />
                     <span style={{ color: '#6e7681', fontSize: 10 }}>Ingest bearings from a KrakenSDR / Matchstiq / JSON-lines DF process over the network (host:port).</span></span>
                 </button>
@@ -559,6 +639,7 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
             </div>
             {liveAdding ? (
               <div style={{ padding: 10, background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, display: 'grid', gridTemplateColumns: 'auto 1fr auto 1fr', gap: 6, alignItems: 'center', fontSize: 12 }}>
+                {editLiveId && <div style={{ gridColumn: '1 / -1', fontSize: 11, color: '#58a6ff' }}>Editing <strong>{liveForm.name || editLiveId}</strong> — saving re-applies these settings and restarts the capture.</div>}
                 <span style={{ color: '#8b949e' }}>driver</span>
                 <select style={inputStyle} value={liveForm.driver_id} onChange={e => {
                   const drv = drivers.find(x => x.id === e.target.value)
@@ -735,8 +816,10 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
                 <span style={{ gridColumn: '2 / -1', fontSize: 11, color: '#6e7681' }}>{liveAccEst ? liveAccEst.note : '…'}</span>
 
                 <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 6, marginTop: 4 }}>
-                  <button style={{ ...btn, background: '#238636', borderColor: '#238636' }} onClick={submitLive}><Cpu size={12} /> Start live DF</button>
-                  <button style={btn} onClick={() => setLiveAdding(false)}>Cancel</button>
+                  <button style={{ ...btn, background: '#238636', borderColor: '#238636' }} onClick={submitLive}>
+                    {editLiveId ? <><Save size={12} /> Save changes</> : <><Cpu size={12} /> Start live DF</>}
+                  </button>
+                  <button style={btn} onClick={() => { setLiveAdding(false); setEditLiveId(null) }}>Cancel</button>
                 </div>
               </div>
             ) : (

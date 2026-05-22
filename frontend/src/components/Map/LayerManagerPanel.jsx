@@ -9,6 +9,7 @@
  */
 import { useMemo, useRef, useState } from 'react'
 import RegionDownloadPanel from './RegionDownloadPanel'
+import OsintFeedsPanel from './OsintFeedsPanel'
 
 const KIND_LABELS = {
   geojson: 'Vector',
@@ -44,6 +45,7 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
                                             onOpenSaveStateDialog, onLoadFullState }) {
   const [kindFilter, setKindFilter] = useState(new Set(ALL_KINDS))
   const [tileFormOpen, setTileFormOpen] = useState(false)
+  const [osintOpen, setOsintOpen] = useState(false)
   const [tileForm, setTileForm] = useState({
     name: '', url: '', type: 'xyz', minZoom: 0, maxZoom: 18,
     attribution: '', wmsLayers: '',
@@ -157,6 +159,11 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
           onClick={() => setTileFormOpen(o => !o)}>
           🌐 Add tile source
         </button>
+        <button className={`btn ${osintOpen ? 'btn-primary' : 'btn-ghost'}`} style={{ fontSize: 11, padding: '4px 10px' }}
+          title="Import live OSINT mapping feeds (DeepState, GDELT, ADS-B, FIRMS, ACLED, AIS, …) as toggleable layers"
+          onClick={() => setOsintOpen(o => !o)}>
+          🛰 OSINT feeds
+        </button>
         <div style={{ width: 1, height: 18, background: '#30363d', margin: '0 2px' }} />
         <button className="btn btn-ghost" style={{ fontSize: 11, padding: '4px 10px' }}
           title="Save just the layers in this panel — KMZ / GeoJSON / imagery / tiles / DTED / drawings."
@@ -207,6 +214,9 @@ export default function LayerManagerPanel({ ul, openFileDialog, drawCtrlRef, reg
       <RegionDownloadPanel preselect={regionPreselect} onConsumePreselect={onConsumeRegionPreselect}
                             incomingBbox={incomingBbox} onConsumeBbox={onConsumeBbox}
                             onRequestDrawBbox={onRequestDrawBbox} />
+
+      {/* Live OSINT feeds → toggleable map layers (collapsed by default) */}
+      {osintOpen && <OsintFeedsPanel ul={ul} />}
 
       {/* Tile source form */}
       {tileFormOpen && (

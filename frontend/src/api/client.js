@@ -11,6 +11,19 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+// Attach the bearer token (saved at login under localStorage['ares.token']) to
+// every REST request, so the API works when ARES_AUTH is enabled (networked /
+// non-loopback deployments authenticate by default). The WebSocket carries the
+// same token as a ?token= query param — see createSdrSocket. Without this, an
+// auth-enabled backend answers every REST call with 401 "Missing bearer token".
+api.interceptors.request.use((config) => {
+  try {
+    const t = (typeof localStorage !== 'undefined') && localStorage.getItem('ares.token')
+    if (t) config.headers = { ...(config.headers || {}), Authorization: `Bearer ${t}` }
+  } catch { /* localStorage unavailable (SSR / privacy mode) — send unauthenticated */ }
+  return config
+})
+
 // ── Core simulation endpoints ────────────────────────────────────────────────
 
 export async function simulateCoverage(params) {
@@ -86,6 +99,10 @@ export async function startLiveDf(body) {
 }
 export async function stopLiveDf(id, remove = false) {
   const { data } = await api.post(`/df/live/${encodeURIComponent(id)}/stop`, null, { params: { remove } }); return data
+}
+// Re-configure an existing live-DF device in place (same id) and re-spawn it.
+export async function updateLiveDf(id, body) {
+  const { data } = await api.put(`/df/live/${encodeURIComponent(id)}`, body); return data
 }
 export async function listLiveDf() {
   const { data } = await api.get('/df/live'); return data
@@ -410,6 +427,23 @@ export async function searchRegions(q, limit = 40) {
 export async function regionAtPoint(lat, lon) {
   const { data } = await api.get('/regions/at', { params: { lat, lon } })
   return data
+}
+
+// ── OSINT feeds (DeepState / GDELT / ADS-B / FIRMS / ACLED / AIS / scrape / generic) ──
+export async function getOsintFeeds() {
+  const { data } = await api.get('/osint/feeds'); return data
+}
+export async function fetchOsintFeed(id, body = {}) {
+  const { data } = await api.post(`/osint/feeds/${encodeURIComponent(id)}/fetch`, body); return data
+}
+export async function addOsintFeed(body) {
+  const { data } = await api.post('/osint/feeds', body); return data
+}
+export async function deleteOsintFeed(id) {
+  const { data } = await api.delete(`/osint/feeds/${encodeURIComponent(id)}`); return data
+}
+export async function setOsintFeedConfig(id, body) {
+  const { data } = await api.put(`/osint/feeds/${encodeURIComponent(id)}/config`, body); return data
 }
 export async function downloadRegionData(code, params = {}) {
   // params: { layers?:[...], max_zoom?, source? } — default layers = terrain+imagery+buildings+osm+clutter

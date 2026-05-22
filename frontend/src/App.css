@@ -638,3 +638,22 @@
 .leaflet-tooltip.mv-feature-label::before {
   display: none;
 }
+
+/* ── Feature click popups ──────────────────────────────────────────────────
+   Leaflet's default popup is white, but our popup content (placemark name +
+   description, LoB/fix details, etc.) uses the app's light dark-theme text —
+   light-on-white is unreadable. Theme the popup bubble dark to match. */
+.leaflet-popup-content-wrapper {
+  background: #161b22;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+}
+.leaflet-popup-content { color: #c9d1d9; margin: 8px 12px; }
+.leaflet-popup-content strong,
+.leaflet-popup-content b { color: #e6edf3; }
+.leaflet-popup-content a { color: #58a6ff; }
+.leaflet-popup-tip { background: #161b22; border: 1px solid #30363d; box-shadow: none; }
+.leaflet-popup-close-button { color: #8b949e !important; }
+.leaflet-popup-close-button:hover { color: #e6edf3 !important; }

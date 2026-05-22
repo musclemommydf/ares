@@ -24,6 +24,7 @@ import BearingTimeScope from './BearingTimeScope'
 import { dfTrackerStep, dfTrackerState, dfTrackerReset } from '../../api/client'
 
 const _WATERFALL_MAX = 140   // rows of waterfall history kept per channel
+const FREQ_UNITS = { Hz: 1, kHz: 1e3, MHz: 1e6, GHz: 1e9 }   // multiplier → Hz
 
 const inp = { background: '#0d1117', border: '1px solid #30363d', borderRadius: 4, color: '#e6edf3', fontSize: 11, padding: '3px 5px', width: 86 }
 const lab = { fontSize: 10, color: '#8b949e', display: 'block', marginBottom: 2 }
@@ -52,7 +53,14 @@ export default function DfPanel({ onSendAlgorithmFixToMap = null } = {}) {
   const [tuneHz, setTuneHz] = useState(dev?.frequency_hz || 433.92e6)
   const [threshold, setThreshold] = useState(dev?.df_threshold_dbm ?? -90)
   const [gain, setGain] = useState(30)
+  const [unit, setUnit] = useState('MHz')                 // frequency display/entry unit (default MHz)
+  const [perChFreq, setPerChFreq] = useState({})          // {channelIdx: center_hz} — per-channel spectrum centre override
+  const [tuning, setTuning] = useState(false)             // a device retune (frequency_hz) is in flight
   const [expandPerCh, setExpandPerCh] = useState(false)   // by default show one spectrum per *device*; toggle to one per channel
+  // Frequency unit helpers: store everything in Hz internally, show/enter in `unit`.
+  const uf = FREQ_UNITS[unit] || 1e6
+  const toHz = (v) => Number(v) * uf
+  const inU = (hz) => { const v = Number(hz) / uf; return Number.isFinite(v) ? +v.toPrecision(12) : '' }
   const [agc, setAgc] = useState(true)
   const [demod, setDemod] = useState('nfm')
   const [audioStatus, setAudioStatus] = useState(null)
@@ -67,7 +75,7 @@ export default function DfPanel({ onSendAlgorithmFixToMap = null } = {}) {
   useEffect(() => { getCompassModes().then(setCompass).catch(() => {}) }, [])
   useEffect(() => {
     if (!dev) { setAcc(null); return }
-    setCenter(dev.frequency_hz || 433.92e6); setTuneHz(dev.frequency_hz || 433.92e6); setThreshold(dev.df_threshold_dbm ?? -90)
+    setCenter(dev.frequency_hz || 433.92e6); setTuneHz(dev.frequency_hz || 433.92e6); setThreshold(dev.df_threshold_dbm ?? -90); setPerChFreq({})
     getDfAccuracyEstimate({ channels: nCh, array_type: dev.array_type || 'uca',
       spacing_wavelengths: dev.array_spacing_wavelengths || 0.4, frequency_hz: dev.frequency_hz || 433.92e6 })
       .then(setAcc).catch(() => setAcc(null))
@@ -80,7 +88,7 @@ export default function DfPanel({ onSendAlgorithmFixToMap = null } = {}) {
     const tick = async () => {
       try {
         const got = await Promise.all(Array.from({ length: nCh }, (_, ch) =>
-          getSdrSpectrum(dev.id, { center_hz: center, span_hz: span, n_bins: 1024, channel: ch }).catch(() => null)))
+          getSdrSpectrum(dev.id, { center_hz: perChFreq[ch] ?? center, span_hz: span, n_bins: 1024, channel: ch }).catch(() => null)))
         if (stop) return
         setFrames(got)
         setHist(prev => got.map((fr, ch) => fr ? [...((prev[ch] || [])).slice(-(_WATERFALL_MAX - 1)), fr] : (prev[ch] || [])))
@@ -88,7 +96,7 @@ export default function DfPanel({ onSendAlgorithmFixToMap = null } = {}) {
     }
     tick(); const h = setInterval(tick, 700)
     return () => { stop = true; clearInterval(h) }
-  }, [devId, center, span, nCh])  // eslint-disable-line
+  }, [devId, center, span, nCh, perChFreq])  // eslint-disable-line
 
   const recentLobs = useMemo(() => {
     const cut = Date.now() / 1000 - 90
@@ -204,6 +212,21 @@ export default function DfPanel({ onSendAlgorithmFixToMap = null } = {}) {
     setThreshold(v)
     if (dev) updateSdrDevice(dev.id, { df_threshold_dbm: Number(v) }).catch(() => {})
   }
+  // Retune the radio: persist frequency_hz (live-DF re-spawns + re-tunes; external
+  // adapters pick it up) and re-centre the spectrum on the new band. This is what
+  // makes typing a frequency actually move the receiver.
+  const applyTune = async (hz) => {
+    const f = Math.round(Number(hz) || tuneHz)
+    if (!f || f <= 0 || !dev) return
+    setTuneHz(f); setCenter(f); setPerChFreq({})       // new band → drop per-channel overrides
+    setTuning(true)
+    try {
+      const u = await updateSdrDevice(dev.id, { frequency_hz: f })
+      setDevices(prev => prev.map(d => d.id === dev.id ? u : d))
+      setAudioStatus({ status: 'ok', detail: `✓ tuned ${(f / 1e6).toFixed(5)} MHz` })
+    } catch (e) { setAudioStatus({ status: 'error', detail: 'tune failed: ' + (e?.response?.data?.detail || e?.message || e) }) }
+    finally { setTuning(false) }
+  }
   const listen = async () => {
     if (!dev) return
     try { setAudioStatus(await startSdrAudio(dev.id, tuneHz, demod)) }
@@ -286,9 +309,14 @@ export default function DfPanel({ onSendAlgorithmFixToMap = null } = {}) {
               {expandPerCh ? `▾ all ${nCh} ch` : `▸ ch0 only`}
             </button>
           )}
-          <label style={{ color: '#8b949e' }}>centre <input style={inp} type="number" value={center} onChange={e => setCenter(Number(e.target.value) || center)} /> Hz</label>
-          <label style={{ color: '#8b949e' }}>span <input style={inp} type="number" value={span} onChange={e => setSpan(Math.max(1e3, Number(e.target.value) || span))} /> Hz</label>
-          <span style={{ color: '#6e7681', fontSize: 10 }}>min {((center - span / 2) / 1e6).toFixed(3)} – max {((center + span / 2) / 1e6).toFixed(3)} MHz</span>
+          <label style={{ color: '#8b949e' }}>units&nbsp;
+            <select style={{ ...inp, width: 'auto' }} value={unit} onChange={e => setUnit(e.target.value)}>
+              {Object.keys(FREQ_UNITS).map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </label>
+          <label style={{ color: '#8b949e' }}>centre <input style={inp} type="number" step="any" value={inU(center)} onChange={e => setCenter(toHz(e.target.value) || center)} /> {unit}</label>
+          <label style={{ color: '#8b949e' }}>span <input style={inp} type="number" step="any" value={inU(span)} onChange={e => setSpan(Math.max(1e3, toHz(e.target.value) || span))} /> {unit}</label>
+          <span style={{ color: '#6e7681', fontSize: 10 }}>min {inU(center - span / 2)} – max {inU(center + span / 2)} {unit}</span>
         </div>
         {(() => {
           // by default show one spectrum per *device* (channel 0); expand to one per channel on demand
@@ -296,10 +324,28 @@ export default function DfPanel({ onSendAlgorithmFixToMap = null } = {}) {
           const shown = (nCh > 1 && !expandPerCh) ? [allFrames[0] ?? null] : allFrames
           const labelFor = (i) => (nCh > 1 && expandPerCh) ? `ch${i}` : (nCh > 1 ? `${nCh}ch — ch0` : '')
           const heightFor = () => (shown.length > 1) ? Math.max(90, Math.floor(360 / shown.length)) : 200
-          return shown.map((fr, i) => (
-            <SpectrumViewer key={i} frame={fr ? { ...fr, df_threshold_dbm: threshold } : null}
-              label={labelFor(i)} tuneHz={tuneHz} onTune={setTuneHz} history={hist[i] || []} height={heightFor()} />
-          ))
+          const perCh = nCh > 1 && expandPerCh
+          return shown.map((fr, i) => {
+            const chHz = perChFreq[i] ?? center
+            const overridden = perChFreq[i] != null && perChFreq[i] !== center
+            return (
+              <div key={i}>
+                {perCh && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#8b949e', marginBottom: 2 }}>
+                    <span style={{ fontWeight: 700, color: overridden ? '#58a6ff' : '#8b949e' }}>ch{i}</span>
+                    <label title="This channel's spectrum centre — pans within the captured band (= sample rate). Use the global Tune to move the radio.">
+                      freq <input style={{ ...inp, width: 84 }} type="number" step="any" value={inU(chHz)}
+                        onChange={e => { const hz = toHz(e.target.value); setPerChFreq(p => ({ ...p, [i]: hz || center })) }} /> {unit}
+                    </label>
+                    {overridden && <button style={{ ...btn, padding: '1px 6px' }} title="follow the global centre"
+                      onClick={() => setPerChFreq(p => { const n = { ...p }; delete n[i]; return n })}>↺</button>}
+                  </div>
+                )}
+                <SpectrumViewer frame={fr ? { ...fr, df_threshold_dbm: threshold } : null}
+                  label={labelFor(i)} tuneHz={tuneHz} onTune={setTuneHz} history={hist[i] || []} height={heightFor()} />
+              </div>
+            )
+          })
         })()}
       </div>
 
@@ -332,9 +378,18 @@ export default function DfPanel({ onSendAlgorithmFixToMap = null } = {}) {
         borderLeft: '1px solid #21262d', paddingLeft: 8,
       }}>
         <div>
-          <span style={lab}>DF tune frequency (drop the tuner on a signal in the spectrum, or type)</span>
-          <input style={{ ...inp, width: '100%', maxWidth: 160 }} type="number" value={Math.round(tuneHz)} onChange={e => setTuneHz(Number(e.target.value) || tuneHz)} /> Hz
-          <div style={{ fontSize: 10, color: '#6e7681' }}>{(tuneHz / 1e6).toFixed(5)} MHz</div>
+          <span style={lab}>DF tune frequency (type & press Enter / Tune to move the radio, or click a signal in the spectrum)</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+            <input style={{ ...inp, width: 110 }} type="number" step="any" value={inU(tuneHz)}
+              onChange={e => setTuneHz(toHz(e.target.value) || tuneHz)}
+              onKeyDown={e => { if (e.key === 'Enter') applyTune(tuneHz) }} />
+            <span style={{ color: '#8b949e', fontSize: 11 }}>{unit}</span>
+            <button style={{ ...btn, background: '#1f6feb', borderColor: '#1f6feb', color: '#fff' }}
+              disabled={!dev || tuning} onClick={() => applyTune(tuneHz)}>{tuning ? 'Tuning…' : '⤵ Tune'}</button>
+          </div>
+          <div style={{ fontSize: 10, color: '#6e7681' }}>
+            {(tuneHz / 1e6).toFixed(5)} MHz{dev?.frequency_hz != null ? ` · radio at ${(dev.frequency_hz / 1e6).toFixed(5)} MHz` : ''}
+          </div>
         </div>
         <div>
           <span style={lab}>threshold (min power for a bin to count active → shoot a LoB)</span>

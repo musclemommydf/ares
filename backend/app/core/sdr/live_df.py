@@ -233,16 +233,22 @@ class LiveDfAdapter(_Base):
         self._retune()
         frame = self._driver.read_iq(int(self.n_snapshots))
         X = np.asarray(frame.samples)
-        if X.ndim != 2 or X.shape[0] < 2:
-            raise RuntimeError(f"need ≥2 coherent channels, got shape {X.shape}")
+        if X.ndim == 1:
+            X = X[np.newaxis, :]
+        # Cache the spectrum from *whatever* channels we captured, before the DF
+        # channel-count gate — so a stock single-RX Pluto (which can't DF without the
+        # 2R2T MIMO mod) still shows its real RF in the spectrum panel instead of
+        # falling through to the synthetic placeholder.
+        self._cache_spectrum(X)
+        if X.shape[0] < 2:
+            raise RuntimeError(f"need ≥2 coherent channels for DF, got shape {X.shape} "
+                               f"(driver backend {self._backend_label or '?'}); spectrum still works")
         nch = self._interf_geom.n
         if X.shape[0] > nch:
             X = X[:nch]
         if self._cal is not None:
             X = apply_gain(X, self._cal)
-        X = np.ascontiguousarray(X)
-        self._cache_spectrum(X)
-        return X
+        return np.ascontiguousarray(X)
 
     # ── spectrum (so the DF panel shows the *real* radio, not synthetic) ─────────
     def _cache_spectrum(self, X: np.ndarray, n_bins: int = 1024) -> None:
@@ -280,30 +286,42 @@ class LiveDfAdapter(_Base):
 
     def spectrum(self, center_hz: float, span_hz: float, n_bins: int, channel: int) -> Optional[dict]:
         """Return a PSD frame (dsp.spectrum_frame shape) from the latest live capture,
-        cropped/resampled to the requested span/bins. None if nothing captured yet."""
+        windowed around the *requested* centre (clamped inside the captured band) and
+        resampled to the requested span/bins. None if nothing captured yet.
+
+        The wideband capture spans [c-fs/2, c+fs/2] at the device's tuned frequency;
+        a requested centre within that band pans the view (no retune), so the DF panel
+        can show a different sub-band per channel. To move outside the band, retune the
+        device (frequency_hz) — that re-captures around the new centre."""
         s = self._spectrum
         if not s or not s["psd_by_ch"]:
             return None
         ch = max(0, min(len(s["psd_by_ch"]) - 1, int(channel)))
         psd = np.asarray(s["psd_by_ch"][ch], dtype=float)
-        fs = s["sample_rate_hz"]; c = s["center_hz"]
-        out_span = fs
-        if span_hz and span_hz < fs:                       # crop to the centre, then resample to n_bins
-            keep = max(2, int(round(len(psd) * span_hz / fs)))
-            lo = (len(psd) - keep) // 2
-            psd = psd[lo:lo + keep]; out_span = span_hz
-        if len(psd) != n_bins:
-            psd = np.interp(np.linspace(0, len(psd) - 1, n_bins), np.arange(len(psd)), psd)
-        peak_i = int(np.argmax(psd))
-        f0 = c - out_span / 2.0
+        N = len(psd)
+        fs = float(s["sample_rate_hz"]); c = float(s["center_hz"])
+        band_lo = c - fs / 2.0
+        hz_per_bin = fs / max(1, N)
+        out_span = fs if (not span_hz or span_hz >= fs) else float(span_hz)
+        keep = max(2, min(N, int(round(N * out_span / fs))))
+        # window centred on the requested centre, clamped so it stays inside the band
+        req = float(center_hz) if center_hz else c
+        center_bin = int(round((req - band_lo) / hz_per_bin))
+        lo = min(max(0, center_bin - keep // 2), max(0, N - keep))
+        win = psd[lo:lo + keep]
+        eff_span = len(win) * hz_per_bin
+        f0 = band_lo + lo * hz_per_bin
+        if len(win) != n_bins:
+            win = np.interp(np.linspace(0, len(win) - 1, n_bins), np.arange(len(win)), win)
+        peak_i = int(np.argmax(win))
         src = "synthetic" if self._backend_label == "synthetic" else "hardware"
         return {
             "source": src, "backend": self._backend_label, "driver": self.driver_id, "channel": ch,
-            "center_hz": float(c), "span_hz": float(out_span), "n_bins": int(n_bins),
-            "sample_rate_hz": fs, "power_dbm": [round(float(v), 2) for v in psd],
-            "noise_floor_dbm": round(float(np.percentile(psd, 20.0)), 2),
-            "peak_hz": round(f0 + (peak_i / max(1, n_bins - 1)) * out_span, 1),
-            "peak_dbm": round(float(psd[peak_i]), 2), "age_s": round(time.time() - s["t"], 2),
+            "center_hz": float(f0 + eff_span / 2.0), "span_hz": float(eff_span), "n_bins": int(n_bins),
+            "sample_rate_hz": fs, "power_dbm": [round(float(v), 2) for v in win],
+            "noise_floor_dbm": round(float(np.percentile(win, 20.0)), 2),
+            "peak_hz": round(f0 + (peak_i / max(1, n_bins - 1)) * eff_span, 1),
+            "peak_dbm": round(float(win[peak_i]), 2), "age_s": round(time.time() - s["t"], 2),
             "t": s["t"],
         }
 

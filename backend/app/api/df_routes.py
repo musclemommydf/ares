@@ -510,13 +510,10 @@ class LiveDfStartRequest(BaseModel):
     cal_interval_s: float = Field(300.0, ge=10.0, le=86400.0)
 
 
-@router.post("/live/start")
-async def df_live_start(body: LiveDfStartRequest, principal: dict = Depends(require_auth)):
-    from app.core.sdr import drivers, sdr_manager
-    from app.core.security import audit
-    avail = {d["id"] for d in drivers.list_drivers()}
-    if body.driver_id not in avail:
-        raise HTTPException(400, f"unknown driver_id {body.driver_id!r}; choose from {sorted(avail)}")
+def _build_live_payload(body: "LiveDfStartRequest") -> dict:
+    """Translate a LiveDfStartRequest into the SDRDevice payload. Shared by the
+    start route and the in-place update (Edit) route so both apply identical
+    metadata + array geometry from the same form."""
     md: dict = {
         "driver_id": body.driver_id, "driver_args": dict(body.driver_args or {}),
         "sample_rate_hz": body.sample_rate_hz, "gain_db": body.gain_db,
@@ -544,7 +541,7 @@ async def df_live_start(body: LiveDfStartRequest, principal: dict = Depends(requ
         md["array"] = {"type": "adcock", "n": n_ring, "radius_m": float(radius), "sense": bool(body.array_sense),
                        "name": f"{body.name}-adcock"}
         channels = n_ring + (1 if body.array_sense else 0)
-    payload = {
+    return {
         "name": body.name, "type": "live_df", "host": body.driver_id, "port": 0,
         "source_class": "multi_channel", "channels": channels,
         "array_type": body.array_type, "array_spacing_wavelengths": body.array_spacing_wavelengths,
@@ -554,13 +551,49 @@ async def df_live_start(body: LiveDfStartRequest, principal: dict = Depends(requ
         "enabled": True, "use_gps": body.use_gps, "auto_coverage": body.auto_coverage,
         "metadata": md,
     }
+
+
+@router.post("/live/start")
+async def df_live_start(body: LiveDfStartRequest, principal: dict = Depends(require_auth)):
+    from app.core.sdr import drivers, sdr_manager
+    from app.core.security import audit
+    avail = {d["id"] for d in drivers.list_drivers()}
+    if body.driver_id not in avail:
+        raise HTTPException(400, f"unknown driver_id {body.driver_id!r}; choose from {sorted(avail)}")
     try:
-        dev = sdr_manager.add(payload)
+        dev = sdr_manager.add(_build_live_payload(body))
     except ValueError as e:
         raise HTTPException(400, str(e))
     audit("df.live.start", id=dev.id, driver=body.driver_id, freq_hz=body.frequency_hz,
           channels=body.channels, method=body.method, by=principal.get("sub"))
     return {"status": "started", "device": dev.public()}
+
+
+@router.put("/live/{device_id}")
+async def df_live_update(device_id: str, body: LiveDfStartRequest, principal: dict = Depends(require_auth)):
+    """Re-configure an existing live-DF device in place (same id) from the SDR
+    console's Edit button, then re-spawn it with the new parameters. Preserves the
+    current enabled state (editing a stopped device doesn't start it)."""
+    from app.core.sdr import drivers, sdr_manager
+    from app.core.security import audit
+    dev = sdr_manager.get(device_id)
+    if dev is None or dev.type != "live_df":
+        raise HTTPException(404, "no such live-DF device")
+    avail = {d["id"] for d in drivers.list_drivers()}
+    if body.driver_id not in avail:
+        raise HTTPException(400, f"unknown driver_id {body.driver_id!r}; choose from {sorted(avail)}")
+    patch = _build_live_payload(body)
+    patch.pop("type", None)         # type is immutable
+    patch.pop("enabled", None)      # don't flip enabled on an edit — manager re-spawns if it's on
+    try:
+        dev = sdr_manager.update(device_id, patch)
+    except KeyError:
+        raise HTTPException(404, "no such device")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    audit("df.live.update", id=device_id, driver=body.driver_id, freq_hz=body.frequency_hz,
+          method=body.method, by=principal.get("sub"))
+    return {"status": "updated", "device": dev.public()}
 
 
 @router.post("/live/{device_id}/stop")

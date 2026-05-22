@@ -141,7 +141,7 @@ function parseCoords(q) {
 }
 
 export default function MapView({
-  tx, txLabel = 'TX 1', rxPoint, coverageGeoJSON, buildingGeoJSON, extraTxList = [], gpsFix = null,
+  tx, txLabel = 'TX 1', rxPoint, coverageGeoJSON, buildingGeoJSON, extraTxList = [], gpsFix = null, gpsTrackers = [],
   p2pProfile, activeTab, minSignalDbm,
   onMapClick, onTxDrag, onRxDrag, onExtraTxDrag,
   distUnit = 'metric', setDistUnit,
@@ -671,13 +671,20 @@ export default function MapView({
   const ulRef = useRef(ul)
   useEffect(() => { ulRef.current = ul }, [ul])
 
-  // operator GPS — "you are here" marker
+  // operator GPS — "you are here" marker (hover lists the SDRs pinned to this fix)
   useEffect(() => {
     const map = leafletRef.current
     if (!map) return
     if (gpsMarkerRef.current) { try { map.removeLayer(gpsMarkerRef.current) } catch { /* noop */ } gpsMarkerRef.current = null }
     if (gpsFix && typeof gpsFix.lat === 'number' && typeof gpsFix.lon === 'number') {
       const hdg = typeof gpsFix.heading_deg === 'number' ? `transform:rotate(${gpsFix.heading_deg}deg);` : ''
+      const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+      const head = `<div><strong>You — GPS</strong> <span style="opacity:0.7">(${esc(gpsFix.source || 'manual')}${gpsFix.heading_deg != null ? ` · hdg ${Math.round(gpsFix.heading_deg)}°` : ''}${typeof gpsFix.accuracy_m === 'number' ? ` · ±${Math.round(gpsFix.accuracy_m)} m` : ''})</span></div>`
+      const trk = (gpsTrackers || [])
+      const list = trk.length
+        ? `<div style="margin-top:3px;opacity:0.85">SDRs pinned to this GPS:</div>` +
+          trk.map(t => `<div style="white-space:nowrap">• ${esc(t.name || t.id)} <span style="opacity:0.55">${esc(t.type)}${t.status && t.status !== 'streaming' ? ` · ${esc(t.status)}` : ''}</span></div>`).join('')
+        : `<div style="margin-top:3px;opacity:0.6">No SDRs are using this GPS fix.</div>`
       const m = L.marker([gpsFix.lat, gpsFix.lon], {
         interactive: true, zIndexOffset: 1100,
         icon: L.divIcon({ className: '', iconSize: [22, 22], iconAnchor: [11, 11], html:
@@ -685,10 +692,10 @@ export default function MapView({
              <circle cx="11" cy="11" r="9" fill="#22d3ee" fill-opacity="0.35" stroke="#22d3ee"/>
              <path d="M11 2 L15 13 L11 10 L7 13 Z" fill="#22d3ee" stroke="#fff" stroke-width="0.8"/>
            </svg></div>` }),
-      }).addTo(map).bindTooltip(`You — GPS (${gpsFix.source || 'manual'})${gpsFix.heading_deg != null ? ` · hdg ${Math.round(gpsFix.heading_deg)}°` : ''}`, { direction: 'top' })
+      }).addTo(map).bindTooltip(`${head}${list}`, { direction: 'top', opacity: 0.95 })
       gpsMarkerRef.current = m
     }
-  }, [gpsFix])
+  }, [gpsFix, gpsTrackers])
 
   // ── Draw controller: initialize once map is ready ────────────────────────
   useEffect(() => {

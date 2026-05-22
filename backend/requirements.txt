@@ -22,3 +22,7 @@ rich>=13.7
 loguru>=0.7
 python-dotenv>=1.0
 pyserial>=3.5            # serial-NMEA reader for a USB GPS dongle (the gpsd path needs no Python dep)
+pyadi-iio>=0.0.16        # PlutoSDR / ANTSDR over libiio (pulls pylibiio; binds to the system libiio.so).
+                         # Harmless without a board — the driver catches the ImportError and falls back.
+                         # NB: real RF from a Pluto needs THIS (or the SoapyPlutoSDR module); otherwise
+                         # the spectrum/DF path stays synthetic. Needs system libiio (apt: libiio0/libiio-utils).
