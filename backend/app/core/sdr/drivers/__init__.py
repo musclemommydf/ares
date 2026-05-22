@@ -26,6 +26,7 @@ from .antsdr_e200 import AntsdrE200Driver
 from .matchstiq import MatchstiqX40Driver
 from .uhd import UhdUsrpDriver
 from .plutosdr import PlutoSdrDriver
+from .fmcomms5 import FmComms5Driver
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ _REGISTRY: dict[str, tuple[DriverCapabilities, Callable[..., SdrDriver]]] = {
     MatchstiqX40Driver.capabilities.driver_id: (MatchstiqX40Driver.capabilities, MatchstiqX40Driver),
     UhdUsrpDriver.capabilities.driver_id:      (UhdUsrpDriver.capabilities,      UhdUsrpDriver),
     PlutoSdrDriver.capabilities.driver_id:     (PlutoSdrDriver.capabilities,     PlutoSdrDriver),
+    FmComms5Driver.capabilities.driver_id:     (FmComms5Driver.capabilities,     FmComms5Driver),
 }
 
 
@@ -78,6 +80,6 @@ def register(driver_id: str, capabilities: DriverCapabilities, factory: Callable
 __all__ = [
     "DriverCapabilities", "IqFrame", "SdrDriver",
     "SyntheticDriver", "HeimdallDriver", "AntsdrE200Driver",
-    "MatchstiqX40Driver", "UhdUsrpDriver", "PlutoSdrDriver",
+    "MatchstiqX40Driver", "UhdUsrpDriver", "PlutoSdrDriver", "FmComms5Driver",
     "list_drivers", "create", "register",
 ]
