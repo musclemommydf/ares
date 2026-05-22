@@ -10,7 +10,6 @@
     "lint": "eslint src --ext .js,.jsx"
   },
   "dependencies": {
-    "cesium": "^1.123.0",
     "@radix-ui/react-accordion": "^1.2.0",
     "@radix-ui/react-dialog": "^1.1.1",
     "@radix-ui/react-select": "^2.1.1",
@@ -21,6 +20,7 @@
     "@tmcw/togeojson": "^7.1.2",
     "@turf/turf": "^6.5.0",
     "axios": "^1.7.2",
+    "cesium": "^1.123.0",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
     "geotiff": "^3.0.5",
@@ -31,6 +31,7 @@
     "mgrs": "^2.1.0",
     "milsymbol": "^3.0.4",
     "plotly.js-dist-min": "^2.35.0",
+    "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-leaflet": "^4.2.1",

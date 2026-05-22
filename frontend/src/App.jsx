@@ -45,6 +45,7 @@ import TerrainTab from './components/Panels/TerrainTab'
 import BottomPanelContent from './components/Panels/BottomPanelContent'
 import HelpPanel from './components/Common/HelpPanel'
 import DecibelCalculator from './components/Tools/DecibelCalculator'
+import RemoteAccessPanel from './components/Tools/RemoteAccessPanel'
 import ArchivePanel from './components/Tools/ArchivePanel'
 import ManetPanel from './components/Tools/ManetPanel'
 import SatellitePanel from './components/Tools/SatellitePanel'
@@ -119,6 +120,7 @@ export default function App() {
   const [layersOpen, setLayersOpen] = useState(false)
   const [layersRegionPreselect, setLayersRegionPreselect] = useState(null)   // region pre-picked from a right-click on the map
   const [dbCalcOpen, setDbCalcOpen] = useState(false)
+  const [remoteOpen, setRemoteOpen] = useState(false)
   // SDR / DF live state: features from the server-side solver, and the latest
   // auto-coverage GeoJSON from a confirmed fix (rendered as a faint extra layer).
   const [sdrFeatures, setSdrFeatures] = useState([])
@@ -1567,6 +1569,7 @@ export default function App() {
             onImport={() => mapImportApiRef.current?.openFileDialog?.()}
             onPurgeCache={handlePurgeCache}
             onOpenHelp={() => setHelpOpen(true)}
+            onOpenRemote={() => setRemoteOpen(true)}
           />
         </div>
 
@@ -1615,6 +1618,7 @@ export default function App() {
         </div>
       )}
       {dbCalcOpen && <DecibelCalculator onClose={() => setDbCalcOpen(false)} />}
+      {remoteOpen && <RemoteAccessPanel onClose={() => setRemoteOpen(false)} />}
       {layersOpen && (
         <div onClick={() => setLayersOpen(false)}
              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 2000,

@@ -27,6 +27,7 @@ const http  = require('http')
 const https = require('https')
 const fs    = require('fs')
 const net   = require('net')
+const os    = require('os')
 
 let mainWindow   = null
 let backendProcess = null
@@ -35,7 +36,65 @@ let frontendServer = null
 const ICON_PATH = path.join(__dirname, '..', 'frontend', 'public', 'icon.png')
 
 const BACKEND_PORT  = 8000
-const FRONTEND_PORT = 3100          // internal static file server
+const FRONTEND_PORT = 3100          // internal static file server (loopback only)
+
+// ── Remote access (configured from the in-app UI, persisted here) ──────────────
+// When enabled, the bundled backend is (re)launched bound to 0.0.0.0 with auth ON
+// and a chosen admin password, so a phone/laptop can reach http://<lan-ip>:8000
+// (the backend serves the UI + API). The local desktop window keeps talking to the
+// backend through the loopback proxy below, which auto-injects an admin token so
+// the desktop itself never has to log in. Remote devices hit the backend directly
+// and authenticate with the password — they never touch this proxy.
+let remoteCfg = { enabled: false, password: '' }
+let adminToken = null
+function remoteCfgPath() { return path.join(app.getPath('userData'), 'remote.json') }
+function loadRemoteCfg() {
+  try { return { enabled: false, password: '', ...JSON.parse(fs.readFileSync(remoteCfgPath(), 'utf8')) } }
+  catch { return { enabled: false, password: '' } }
+}
+function saveRemoteCfg(cfg) {
+  try {
+    fs.mkdirSync(path.dirname(remoteCfgPath()), { recursive: true })
+    fs.writeFileSync(remoteCfgPath(), JSON.stringify(cfg))
+  } catch (e) { console.error('save remote cfg failed:', e.message) }
+}
+function lanIps() {
+  const out = []
+  const ifs = os.networkInterfaces()
+  for (const name of Object.keys(ifs)) {
+    for (const a of ifs[name] || []) {
+      if (a.family === 'IPv4' && !a.internal) out.push(a.address)
+    }
+  }
+  return out
+}
+function remoteStatus() {
+  return {
+    enabled: !!remoteCfg.enabled,
+    hasPassword: !!remoteCfg.password,
+    port: BACKEND_PORT,
+    lanIps: lanIps(),
+    urls: lanIps().map(ip => `http://${ip}:${BACKEND_PORT}`),
+  }
+}
+// Log in to the (auth-on) backend as admin and cache the token so the loopback
+// proxy can authenticate the desktop window transparently. No-op when auth is off.
+function mintAdminToken() {
+  return new Promise((resolve) => {
+    if (!remoteCfg.enabled || !remoteCfg.password) { adminToken = null; return resolve(null) }
+    const body = JSON.stringify({ username: 'admin', password: remoteCfg.password })
+    const req = http.request(
+      { hostname: '127.0.0.1', port: BACKEND_PORT, path: '/api/v1/auth/login', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }, timeout: 4000 },
+      (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => {
+        try { adminToken = JSON.parse(d).token || null } catch { adminToken = null }
+        resolve(adminToken)
+      }) })
+    req.on('error', () => { adminToken = null; resolve(null) })
+    req.on('timeout', () => { req.destroy(); adminToken = null; resolve(null) })
+    req.write(body); req.end()
+  })
+}
 
 // ── Utility: find a free port ─────────────────────────────────────────────────
 function getFreePort(preferred) {
@@ -158,23 +217,19 @@ function startFrontendServer(distDir, port) {
   const server = http.createServer((req, res) => {
     const url = req.url.split('?')[0]
 
-    // Proxy /api/* and /ws/* to the Python backend
+    // Proxy /api/* and /ws/* to the Python backend. This server is loopback-only
+    // (the desktop window), so it's safe to auto-attach the admin token when auth
+    // is on — the desktop never sees a login screen; remote devices authenticate
+    // against the backend directly.
     if (url.startsWith('/api/') || url.startsWith('/ws/')) {
-      const options = {
-        hostname: '127.0.0.1',
-        port: BACKEND_PORT,
-        path: req.url,
-        method: req.method,
-        headers: { ...req.headers, host: `127.0.0.1:${BACKEND_PORT}` },
+      const headers = { ...req.headers, host: `127.0.0.1:${BACKEND_PORT}` }
+      if (adminToken && !headers.authorization && !headers.Authorization) {
+        headers.authorization = `Bearer ${adminToken}`
       }
-      const proxy = http.request(options, (backRes) => {
-        res.writeHead(backRes.statusCode, backRes.headers)
-        backRes.pipe(res)
-      })
-      proxy.on('error', (e) => {
-        res.writeHead(502)
-        res.end(`Backend unavailable: ${e.message}`)
-      })
+      const proxy = http.request(
+        { hostname: '127.0.0.1', port: BACKEND_PORT, path: req.url, method: req.method, headers },
+        (backRes) => { res.writeHead(backRes.statusCode, backRes.headers); backRes.pipe(res) })
+      proxy.on('error', (e) => { res.writeHead(502); res.end(`Backend unavailable: ${e.message}`) })
       req.pipe(proxy)
       return
     }
@@ -201,7 +256,37 @@ function startFrontendServer(distDir, port) {
     })
   })
 
-  server.listen(port)
+  // Forward WebSocket upgrades (/api/v1/sdr/stream, /audio/stream, /ws/simulate).
+  // Without this, every WebSocket from the desktop UI fails — which is what made
+  // the audio "Listen" feature error with "audio socket error" (the HTTP-polled
+  // spectrum still worked, masking it). Token is injected as ?token= since the
+  // browser WebSocket API can't set request headers.
+  server.on('upgrade', (req, socket, head) => {
+    const u = req.url.split('?')[0]
+    if (!(u.startsWith('/api/') || u.startsWith('/ws/'))) { socket.destroy(); return }
+    let fwdPath = req.url
+    if (adminToken && !/[?&]token=/.test(fwdPath)) {
+      fwdPath += (fwdPath.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(adminToken)
+    }
+    const proxyReq = http.request({
+      hostname: '127.0.0.1', port: BACKEND_PORT, path: fwdPath, method: req.method,
+      headers: { ...req.headers, host: `127.0.0.1:${BACKEND_PORT}` },
+    })
+    proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
+      const lines = ['HTTP/1.1 101 Switching Protocols']
+      for (const [k, v] of Object.entries(proxyRes.headers)) lines.push(`${k}: ${v}`)
+      socket.write(lines.join('\r\n') + '\r\n\r\n')
+      if (proxyHead && proxyHead.length) socket.write(proxyHead)
+      proxySocket.pipe(socket); socket.pipe(proxySocket)
+      proxySocket.on('error', () => socket.destroy())
+      socket.on('error', () => proxySocket.destroy())
+    })
+    proxyReq.on('error', () => socket.destroy())
+    if (head && head.length) proxyReq.write(head)
+    proxyReq.end()
+  })
+
+  server.listen(port, '127.0.0.1')   // desktop window only; remote clients use the backend directly
   return server
 }
 
@@ -229,11 +314,20 @@ function startBackend() {
     return
   }
 
-  const env = { ...process.env, PYTHONUNBUFFERED: '1', PORT: String(BACKEND_PORT), HOST: '127.0.0.1' }
+  // Loopback by default; bound to all interfaces with auth on when the user has
+  // enabled remote access in the in-app Remote Access panel.
+  const host = remoteCfg.enabled ? '0.0.0.0' : '127.0.0.1'
+  const env = { ...process.env, PYTHONUNBUFFERED: '1', PORT: String(BACKEND_PORT), HOST: host }
+  if (remoteCfg.enabled) {
+    env.ARES_AUTH = 'true'
+    if (remoteCfg.password) env.ARES_ADMIN_PASSWORD = remoteCfg.password
+  } else {
+    env.ARES_AUTH = 'false'
+  }
 
   backendProcess = spawn(python,
     ['-m', 'uvicorn', 'app.main:app',
-     '--host', '127.0.0.1', '--port', String(BACKEND_PORT)],
+     '--host', host, '--port', String(BACKEND_PORT)],
     { cwd: backendDir, env, stdio: ['ignore', 'pipe', 'pipe'] }
   )
 
@@ -264,6 +358,41 @@ function waitForBackend(ms = 30000) {
       setTimeout(check, 500)
     }
     check()
+  })
+}
+
+// ── Restart the backend (after a remote-access change) ────────────────────────
+async function restartBackend() {
+  if (backendProcess) {
+    const old = backendProcess
+    backendProcess = null
+    await new Promise((resolve) => {
+      let done = false
+      const finish = () => { if (!done) { done = true; resolve() } }
+      old.on('exit', finish)
+      try { old.kill('SIGTERM') } catch { finish() }
+      setTimeout(() => { try { old.kill('SIGKILL') } catch {} finish() }, 5000)
+    })
+    await new Promise(r => setTimeout(r, 400))   // let the port free
+  }
+  startBackend()
+  await waitForBackend(30000).catch(() => {})
+  await mintAdminToken()
+}
+
+// ── IPC: the in-app Remote Access panel drives all of this (no env/terminal) ───
+function registerIpc() {
+  ipcMain.handle('remote:get', async () => remoteStatus())
+  ipcMain.handle('remote:set', async (_e, cfg) => {
+    const enabled = !!(cfg && cfg.enabled)
+    // keep the existing password unless a new one is provided
+    const password = (cfg && typeof cfg.password === 'string' && cfg.password.length)
+      ? cfg.password : remoteCfg.password
+    if (enabled && !password) throw new Error('Set a password before enabling remote access.')
+    remoteCfg = { enabled, password }
+    saveRemoteCfg(remoteCfg)
+    await restartBackend()
+    return remoteStatus()
   })
 }
 
@@ -326,6 +455,7 @@ async function createWindow() {
 
   try {
     await waitForBackend(60000)                     // generous: a fresh-installed env is slower to import
+    await mintAdminToken()                           // so the loopback proxy can auth the desktop window
     console.log('Backend ready — loading frontend')
     setSplash('Loading…')
     await mainWindow.loadURL(`http://127.0.0.1:${port}`)
@@ -427,6 +557,9 @@ app.whenReady().then(() => {
   if (fs.existsSync(ICON_PATH)) {
     try { app.setIcon(ICON_PATH) } catch (_) {}
   }
+
+  remoteCfg = loadRemoteCfg()    // restore the user's remote-access choice
+  registerIpc()                  // wire the in-app Remote Access panel
   createWindow()
 })
 

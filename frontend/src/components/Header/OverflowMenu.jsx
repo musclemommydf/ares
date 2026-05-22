@@ -1,4 +1,4 @@
-import { Undo2, Redo2, Square, Layers, GitMerge, Satellite, Archive, Save, FolderOpen, Upload, Trash2, HelpCircle } from 'lucide-react'
+import { Undo2, Redo2, Square, Layers, GitMerge, Satellite, Archive, Save, FolderOpen, Upload, Trash2, HelpCircle, Smartphone } from 'lucide-react'
 
 const HDR = { fontSize: 10, color: '#484f58', padding: '3px 14px', letterSpacing: 0.7, fontWeight: 600 }
 const SEP = { height: 1, background: '#21262d', margin: '4px 0' }
@@ -13,7 +13,7 @@ export default function OverflowMenu({
   canUndo, canRedo, undoTick, onUndo, onRedo,
   drawMode, onToggleBoundsDraw, isSimulating, onInterference, onSuperLayer,
   satToolActive, onToggleSatTool, onOpenArchive,
-  onSaveState, onLoadState, onImport, onPurgeCache, onOpenHelp,
+  onSaveState, onLoadState, onImport, onPurgeCache, onOpenHelp, onOpenRemote,
 }) {
   if (!open) return null
   return (
@@ -66,6 +66,9 @@ export default function OverflowMenu({
       <button className="overflow-menu-item" onClick={onImport}><Upload size={13} /> Import KML / KMZ / Image…</button>
       <div style={SEP} />
       <button className="overflow-menu-item" onClick={onPurgeCache}><Trash2 size={13} /> Purge Cache</button>
+      {typeof window !== 'undefined' && window.aresDesktop && (
+        <button className="overflow-menu-item" onClick={onOpenRemote}><Smartphone size={13} /> Remote Access…</button>
+      )}
       <button className="overflow-menu-item" onClick={onOpenHelp}><HelpCircle size={13} /> Help</button>
     </div>
   )
