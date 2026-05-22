@@ -539,6 +539,142 @@ def radar_two_way_db(distance_m: float, freq_hz: float,
     return L
 
 
+def cost231_wi_db(distance_km: float, freq_mhz: float,
+                  tx_height_m: float, rx_height_m: float,
+                  roof_height_m: float = 15.0, building_sep_m: float = 30.0,
+                  street_width_m: float = 15.0, road_orientation_deg: float = 90.0,
+                  metropolitan: bool = False, los: bool = False) -> float:
+    """
+    COST-231 Walfisch-Ikegami model. Valid: 800–2000 MHz, 0.02–5 km,
+    base 4–50 m, mobile 1–3 m. Models rooftop-to-street diffraction (Lrts) +
+    multiscreen diffraction (Lmsd) over a regular row of buildings.
+
+    For street-canyon LOS a separate (lower) loss applies. NLOS is the default.
+    """
+    d = max(distance_km, 0.02)
+    f = freq_mhz
+    Lfs = 32.4 + 20.0 * math.log10(d) + 20.0 * math.log10(f)
+
+    if los:
+        # Street-canyon line-of-sight (both antennas see down the same street).
+        return 42.6 + 26.0 * math.log10(d) + 20.0 * math.log10(f)
+
+    dh_mobile = roof_height_m - rx_height_m          # rooftop above the mobile
+    dh_base = tx_height_m - roof_height_m            # base above/below the rooftops
+    w = max(street_width_m, 1.0)
+    b = max(building_sep_m, 1.0)
+    phi = max(0.0, min(road_orientation_deg, 90.0))
+
+    # Street-orientation correction
+    if phi < 35.0:
+        Lori = -10.0 + 0.354 * phi
+    elif phi < 55.0:
+        Lori = 2.5 + 0.075 * (phi - 35.0)
+    else:
+        Lori = 4.0 - 0.114 * (phi - 55.0)
+
+    # Rooftop-to-street diffraction + scatter
+    Lrts = -16.9 - 10.0 * math.log10(w) + 10.0 * math.log10(f) + 20.0 * math.log10(max(dh_mobile, 0.1)) + Lori
+    Lrts = max(Lrts, 0.0)
+
+    # Multiscreen diffraction
+    if tx_height_m > roof_height_m:
+        Lbsh = -18.0 * math.log10(1.0 + dh_base)
+        ka = 54.0
+        kd = 18.0
+    else:
+        Lbsh = 0.0
+        kd = 18.0 - 15.0 * dh_base / max(roof_height_m, 1.0)
+        if d >= 0.5:
+            ka = 54.0 - 0.8 * dh_base
+        else:
+            ka = 54.0 - 0.8 * dh_base * (d / 0.5)
+    if metropolitan:
+        kf = -4.0 + 1.5 * (f / 925.0 - 1.0)
+    else:
+        kf = -4.0 + 0.7 * (f / 925.0 - 1.0)
+
+    Lmsd = Lbsh + ka + kd * math.log10(d) + kf * math.log10(f) - 9.0 * math.log10(b)
+
+    if Lrts + Lmsd > 0.0:
+        return Lfs + Lrts + Lmsd
+    return Lfs
+
+
+def ecc33_db(distance_km: float, freq_ghz: float,
+             tx_height_m: float, rx_height_m: float,
+             city_size: str = "medium") -> float:
+    """
+    ECC-33 (Hata-Okumura extended for fixed wireless, ~700 MHz–3.5 GHz).
+    L = Afs + Abm − Gb − Gr.  Heights: base 30–200 m, terminal 1–10 m.
+    """
+    d = max(distance_km, 0.001)
+    f = max(freq_ghz, 0.05)
+    hb = max(tx_height_m, 1.0)
+    hr = max(rx_height_m, 1.0)
+
+    Afs = 92.4 + 20.0 * math.log10(d) + 20.0 * math.log10(f)
+    Abm = (20.41 + 9.83 * math.log10(d) + 7.894 * math.log10(f)
+           + 9.56 * (math.log10(f)) ** 2)
+    Gb = math.log10(hb / 200.0) * (13.958 + 5.8 * (math.log10(d)) ** 2)
+    if city_size == "large":
+        Gr = 0.759 * hr - 1.862
+    else:  # medium city / suburban
+        Gr = (42.57 + 13.7 * math.log10(f)) * (math.log10(hr) - 0.585)
+    return Afs + Abm - Gb - Gr
+
+
+def _spherical_earth_diffraction_db(distance_km: float, freq_mhz: float,
+                                    h1_m: float, h2_m: float,
+                                    k_factor: float = 4.0 / 3.0) -> float:
+    """
+    Beyond-horizon smooth-earth diffraction loss (ITU-R P.526 first residue
+    term, horizontal polarisation). Returns 0 inside the radio horizon.
+    """
+    ae = 6371.0 * k_factor  # effective earth radius (km)
+    f = max(freq_mhz, 20.0)
+    # Marginal line-of-sight (smooth-earth horizon) distance, km.
+    d_los = math.sqrt(2.0 * ae) * (math.sqrt(0.001 * max(h1_m, 0.0)) + math.sqrt(0.001 * max(h2_m, 0.0)))
+    if distance_km <= max(d_los, 1e-6):
+        return 0.0
+    beta = 1.0  # horizontal polarisation, f > 20 MHz
+    X = 2.188 * beta * (f ** (1.0 / 3.0)) * (ae ** (-2.0 / 3.0)) * distance_km
+
+    def _F(x):
+        if x >= 1.6:
+            return 11.0 + 10.0 * math.log10(x) - 17.6 * x
+        return -20.0 * math.log10(max(x, 1e-9)) - 5.6488 * (x ** 1.425)
+
+    def _G(h_m):
+        Y = 9.575e-3 * beta * (f ** (2.0 / 3.0)) * (ae ** (-1.0 / 3.0)) * h_m
+        B = beta * Y
+        if B > 2.0:
+            return 17.6 * math.sqrt(max(B - 1.1, 0.0)) - 5.0 * math.log10(max(B - 1.1, 1e-9)) - 8.0
+        return 20.0 * math.log10(B + 0.1 * B ** 3) if B > 0 else 0.0
+
+    E = _F(X) + _G(h1_m) + _G(h2_m)   # field strength relative to free space (dB, ≤0 beyond horizon)
+    return max(-E, 0.0)
+
+
+def itu_p452_db(distance_km: float, freq_ghz: float,
+                tx_height_m: float, rx_height_m: float,
+                temp_c: float = 15.0, pressure_hpa: float = 1013.0,
+                water_vapour_g_m3: float = 7.5) -> float:
+    """
+    ITU-R P.452 clear-air interference path loss — the LoS subset: free-space
+    spreading + gaseous (O₂ + water-vapour) absorption + smooth-earth diffraction
+    beyond the radio horizon (P.526). The full P.452 ducting/troposcatter/terrain
+    terms need the path profile; for terrain paths use ITM, which carries it.
+    """
+    d = max(distance_km, 1e-3)
+    f = max(freq_ghz, 1e-3)
+    Lbfs = 92.5 + 20.0 * math.log10(f) + 20.0 * math.log10(d)
+    Ag = (oxygen_absorption_db_per_km(f)
+          + water_vapour_absorption_db_per_km(f, water_vapour_g_m3)) * d
+    Ld = _spherical_earth_diffraction_db(d, f * 1000.0, tx_height_m, rx_height_m)
+    return Lbfs + Ag + Ld
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GPU-accelerated batch computation
 # ─────────────────────────────────────────────────────────────────────────────
@@ -616,6 +752,27 @@ def select_model(model: PropagationModel, distance_m: float, freq_hz: float,
     elif model == PropagationModel.RADAR:
         rcs = kwargs.get("rcs_m2", 1.0)
         return radar_two_way_db(distance_m, freq_hz, rcs)
+    elif model == PropagationModel.COST231_WI:
+        return cost231_wi_db(
+            distance_km, freq_mhz, tx_height_m, rx_height_m,
+            roof_height_m=kwargs.get("roof_height_m", 15.0),
+            building_sep_m=kwargs.get("building_sep_m", 30.0),
+            street_width_m=kwargs.get("street_width_m", 15.0),
+            road_orientation_deg=kwargs.get("road_orientation_deg", 90.0),
+            metropolitan=(context == 1),
+            los=bool(kwargs.get("los", False)),
+        )
+    elif model == PropagationModel.ECC33:
+        # context 1 = large city, 2/3 = medium/suburban
+        city = "large" if context == 1 else "medium"
+        return ecc33_db(distance_km, freq_ghz, tx_height_m, rx_height_m, city)
+    elif model == PropagationModel.ITU_P452:
+        return itu_p452_db(
+            distance_km, freq_ghz, tx_height_m, rx_height_m,
+            temp_c=kwargs.get("temp_c", 15.0),
+            pressure_hpa=kwargs.get("pressure_hpa", 1013.0),
+            water_vapour_g_m3=kwargs.get("water_vapour_g_m3", 7.5),
+        )
     else:
         return fspl_db(distance_m, freq_hz)
 

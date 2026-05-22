@@ -240,8 +240,16 @@ class PlutoSdrDriver(SdrDriver):
         (use pyadi for a transmitting Pluto)."""
         if self._backend == "synthetic" and self._fallback:
             self._fallback.transmit(samples); return
+        if self._backend == "soapy" and self._soapy_dev is not None:
+            from .. import iq_capture
+            ok = iq_capture.transmit(self._soapy_dev, self.center_hz, self.sample_rate,
+                                     np.asarray(samples, dtype=np.complex64).ravel(),
+                                     channel=0, gain_db=-float(self.tx_atten_db))
+            if not ok:
+                raise RuntimeError("plutosdr SoapySDR transmit failed (TX unsupported by this Soapy module?)")
+            return
         if self._backend != "pyadi" or self._sdr is None:
-            raise NotImplementedError("plutosdr transmit needs the pyadi-iio backend")
+            raise NotImplementedError("plutosdr transmit needs the pyadi-iio or SoapySDR backend")
         s = np.asarray(samples, dtype=np.complex64).ravel()
         if s.size == 0:
             return

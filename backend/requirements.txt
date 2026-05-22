@@ -26,3 +26,7 @@ pyadi-iio>=0.0.16        # PlutoSDR / ANTSDR over libiio (pulls pylibiio; binds 
                          # Harmless without a board — the driver catches the ImportError and falls back.
                          # NB: real RF from a Pluto needs THIS (or the SoapyPlutoSDR module); otherwise
                          # the spectrum/DF path stays synthetic. Needs system libiio (apt: libiio0/libiio-utils).
+bleak>=0.21              # BLE OpenDroneID / Remote-ID capture (rid_sniffer). No-op without a BT adapter —
+                         # the sniffer catches the ImportError and falls back to the synthetic beacon.
+scapy>=2.5               # WiFi (monitor-mode) OpenDroneID / DJI DroneID capture (rid_sniffer). Needs a
+                         # monitor-capable NIC + CAP_NET_RAW; degrades to BLE-only / synthetic otherwise.

@@ -37,10 +37,11 @@ log = logging.getLogger(__name__)
 
 try:
     import SoapySDR                                          # type: ignore
-    from SoapySDR import SOAPY_SDR_RX, SOAPY_SDR_CF32        # type: ignore
+    from SoapySDR import SOAPY_SDR_RX, SOAPY_SDR_TX, SOAPY_SDR_CF32  # type: ignore
     _HAVE = True
 except Exception:
     SoapySDR = None
+    SOAPY_SDR_TX = None
     _HAVE = False
 
 # device "kind" / model substring → SoapySDR driver name
@@ -221,6 +222,60 @@ def capture(device: Optional[dict], center_hz: float, rate_hz: float, n_samples:
     except Exception as e:  # pragma: no cover - hardware dependent
         log.debug("IQ capture failed (%s @ %.3f MHz): %s", args, center_hz / 1e6, e)
         return None
+
+
+def transmit(device: Optional[dict], center_hz: float, rate_hz: float, samples: np.ndarray,
+             channel: int = 0, gain_db=None, bw_hz: Optional[float] = None,
+             timeout_s: float = 2.0) -> bool:
+    """One-shot SoapySDR transmit of a complex64 baseband burst on ``channel``,
+    tuned to ``center_hz`` at ``rate_hz``. Returns True on success, False if
+    SoapySDR is unavailable or the write failed (callers raise/fall back).
+
+    ``samples`` are expected at ~unit amplitude; SoapySDR's CF32 TX wants the
+    [-1, 1] float range, so we peak-normalise here rather than to ADC counts."""
+    if not _HAVE or SOAPY_SDR_TX is None:
+        return False
+    s = np.asarray(samples, dtype=np.complex64).ravel()
+    if s.size == 0:
+        return True
+    peak = float(np.max(np.abs(s))) or 1.0
+    s = (s / peak * 0.7).astype(np.complex64)            # leave ~3 dB headroom
+    args = soapy_args_for(device)
+    md = (device or {}).get("metadata") or {}
+    g = gain_db if gain_db is not None else md.get("tx_gain_db", md.get("gain_db"))
+    bw = bw_hz if bw_hz is not None else md.get("bandwidth_hz")
+    dev = st = None
+    try:
+        dev = SoapySDR.Device(args)
+        dev.setSampleRate(SOAPY_SDR_TX, channel, float(rate_hz))
+        dev.setFrequency(SOAPY_SDR_TX, channel, float(center_hz))
+        if bw:
+            try: dev.setBandwidth(SOAPY_SDR_TX, channel, float(bw))
+            except Exception: pass
+        if g is not None:
+            try: dev.setGain(SOAPY_SDR_TX, channel, float(g))
+            except Exception: pass
+        st = dev.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32, [int(channel)])
+        dev.activateStream(st)
+        sent, deadline = 0, time.time() + float(timeout_s)
+        while sent < s.size and time.time() < deadline:
+            sr = dev.writeStream(st, [s[sent:]], int(s.size - sent), timeoutUs=int(2e5))
+            n = getattr(sr, "ret", sr if isinstance(sr, int) else 0)
+            if n is None or n <= 0:
+                break
+            sent += int(n)
+        # let the buffered samples drain before tearing the stream down
+        try: dev.deactivateStream(st)
+        except Exception: pass
+        return sent > 0
+    except Exception as e:  # pragma: no cover - hardware dependent
+        log.debug("IQ transmit failed (%s @ %.3f MHz): %s", args, center_hz / 1e6, e)
+        return False
+    finally:
+        try:
+            if st is not None: dev.closeStream(st)
+        except Exception:
+            pass
 
 
 def capture_multi(devices: list[dict], center_hz: float, rate_hz: float, n_samples: int,

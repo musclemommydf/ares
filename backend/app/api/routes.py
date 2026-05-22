@@ -971,6 +971,12 @@ async def propagation_models():
          "freq_range": "2–30 MHz", "description": "Near Vertical Incidence Skywave — short/medium range HF via ionosphere. Context sets reflective layer (D/E/F)."},
         {"id": "radar", "name": "Radar (two-way)",
          "freq_range": "All", "description": "Radar range equation — two-way path loss for target detection. Requires RCS parameter."},
+        {"id": "cost231_wi", "name": "COST-231 Walfisch-Ikegami",
+         "freq_range": "800–2000 MHz", "description": "Microcell urban model — rooftop-to-street + multiscreen diffraction. Context 1 = metropolitan."},
+        {"id": "ecc33", "name": "ECC-33 (Hata-Okumura extended)",
+         "freq_range": "700 MHz–3.5 GHz", "description": "Fixed-wireless extension of Okumura. Context 1 = large city."},
+        {"id": "itu_p452", "name": "ITU-R P.452 (interference)",
+         "freq_range": "100 MHz–50 GHz", "description": "Clear-air interference: free space + gaseous absorption + smooth-earth diffraction beyond the horizon."},
     ]
     return {"models": models}
 
@@ -2454,14 +2460,6 @@ class RayTraceRequestModel(BaseModel):
     min_signal_dbm: float = Field(-120.0, le=0)
 
 
-class SatelliteVisibilityRequestModel(BaseModel):
-    ground_lat: float = Field(..., ge=-90, le=90)
-    ground_lon: float = Field(..., ge=-180, le=180)
-    ground_height_m: float = Field(0.0, ge=0)
-    constellation: str = "STARLINK"   # STARLINK | ISS | GPS | etc.
-    min_elevation_deg: float = Field(10.0, ge=0, le=90)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Route Analysis endpoint
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2712,107 +2710,6 @@ async def simulate_ray_trace(req: RayTraceRequestModel):
     except Exception as e:
         log.exception("Ray trace error")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Satellite Visibility endpoint
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.post("/simulate/satellite_visibility")
-async def simulate_satellite_visibility(req: SatelliteVisibilityRequestModel):
-    """
-    Satellite visibility: pull TLEs from CelesTrak, propagate each with **SGP4**
-    (the canonical `sgp4` package if installed, else the vendored faithful
-    near-earth SGP4 — WGS-72, SPACETRACK REPORT #3), and report sub-points,
-    footprints, and true topocentric az/el/slant-range to the ground station.
-    """
-    import aiohttp as _aiohttp
-    import datetime as _dt
-    from app.core.propagation.sgp4_lib import Satellite, look_angles, propagation_backend
-
-    constellation = req.constellation.upper().replace(" ", "+")
-    url = f"https://celestrak.org/NORAD/elements/gp.php?NAME={constellation}&FORMAT=json"
-    sats_raw = []
-    try:
-        timeout = _aiohttp.ClientTimeout(total=15)
-        async with _aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    sats_raw = await resp.json()
-    except Exception as e:
-        log.warning(f"CelesTrak fetch failed: {e}")
-
-    if not sats_raw:
-        return {"status": "ok", "geojson": {"type": "FeatureCollection", "features": []},
-                "metadata": {"message": "No satellite data available from CelesTrak"}}
-
-    sats_raw = sats_raw[:60]
-    now = _dt.datetime.now(_dt.timezone.utc)
-    features = []
-    deep_space = 0
-    total = 0
-    obs_alt_m = float(getattr(req, "ground_alt_m", 0.0) or 0.0)
-
-    for sat in sats_raw:
-        line1 = sat.get("TLE_LINE1", "")
-        line2 = sat.get("TLE_LINE2", "")
-        name = sat.get("OBJECT_NAME", "Unknown")
-        norad = sat.get("NORAD_CAT_ID", "")
-        if not line1 or not line2:
-            continue
-        try:
-            s = Satellite.from_tle(name, line1, line2)
-            st = s.propagate(now)
-        except Exception:
-            continue
-        if st.error:
-            continue
-        total += 1
-        if st.deep_space:
-            deep_space += 1
-        az, el, rng = look_angles(req.ground_lat, req.ground_lon, obs_alt_m,
-                                  st.lat_deg, st.lon_deg, st.alt_km)
-        visible = el >= req.min_elevation_deg
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [st.lon_deg, st.lat_deg]},
-            "properties": {
-                "name": name, "norad_id": norad,
-                "alt_km": round(st.alt_km, 1),
-                "footprint_radius_km": round(st.footprint_radius_km, 1),
-                "azimuth_deg_from_ground": round(az, 1),
-                "elevation_deg_from_ground": round(el, 1),
-                "slant_range_km": round(rng, 1),
-                "visible": visible,
-                "deep_space_sgp4": st.deep_space,
-                "feature_type": "satellite",
-            },
-        })
-        if visible:
-            features.append({
-                "type": "Feature",
-                "geometry": {"type": "LineString", "coordinates": [[req.ground_lon, req.ground_lat], [st.lon_deg, st.lat_deg]]},
-                "properties": {"name": name, "feature_type": "sat_los",
-                               "elevation_deg": round(el, 1), "azimuth_deg": round(az, 1), "slant_range_km": round(rng, 1)},
-            })
-
-    visible_count = sum(1 for f in features if f.get("properties", {}).get("feature_type") == "satellite" and f["properties"]["visible"])
-    md = {
-        "constellation": constellation,
-        "total_sats": total,
-        "visible_count": visible_count,
-        "ground_station": {"lat": req.ground_lat, "lon": req.ground_lon, "alt_m": obs_alt_m},
-        "min_elevation_deg": req.min_elevation_deg,
-        "timestamp_utc": now.isoformat(),
-        "propagation_backend": propagation_backend(),
-    }
-    if deep_space:
-        md["deep_space_count"] = deep_space
-        if propagation_backend().startswith("vendored"):
-            md["note"] = (f"{deep_space} satellite(s) have period ≥225 min (deep-space). The vendored "
-                          "SGP4 covers the near-earth regime only — `pip install sgp4` for SDP4-grade "
-                          "deep-space accuracy on those.")
-    return {"status": "ok", "geojson": {"type": "FeatureCollection", "features": features}, "metadata": md}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

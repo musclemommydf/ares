@@ -348,13 +348,18 @@ def rid_to_cot(parsed: dict) -> dict:
     return {"sent": sent, "serial": serial}
 
 
-# ── decode session glue (RF capture handed off; synthetic offline) ───────────
+# ── decode session glue (real OTA sniff via rid_sniffer; synthetic offline) ──
 _RID_SESSIONS: dict[str, dict] = {}
+_RID_SNIFFERS: dict[str, "object"] = {}     # sid -> RemoteIdSniffer
 _RID_TOOLS = ("dji_droneid", "rid-decoder", "horus_droneid", "tshark", "tcpdump")
 
 
 def available_tools() -> dict:
-    return {t: bool(shutil.which(t)) for t in _RID_TOOLS}
+    from . import rid_sniffer
+    tools = {t: bool(shutil.which(t)) for t in _RID_TOOLS}
+    tools["bleak"] = rid_sniffer.bleak_available()        # in-process BLE OpenDroneID capture
+    tools["scapy"] = rid_sniffer.scapy_available()        # WiFi monitor-mode capture
+    return tools
 
 
 def _synthetic_beacon(t: float, base_lat: float = 36.114, base_lon: float = -115.173) -> dict:
@@ -373,46 +378,77 @@ def _synthetic_beacon(t: float, base_lat: float = 36.114, base_lon: float = -115
     return p
 
 
-def decode_rid(device: Optional[dict], *, frequency_hz: float = 2.437e9, kind: str = "f3411", label: str = "") -> dict:
-    """Start a Remote-ID / DroneID receive session. The RF side (WiFi/BT sniff for F3411,
-    OFDM RX for the DJI burst) is handed off; without a tool/backend, a synthetic beacon
-    drives the map + CoT path so the chain is exercised offline. ``kind`` ∈ {f3411, dji}."""
+def decode_rid(device: Optional[dict], *, frequency_hz: float = 2.437e9, kind: str = "f3411",
+               label: str = "", wifi_iface: str = "wlan0mon", ble_adapter: str = "hci0") -> dict:
+    """Start a Remote-ID / DroneID receive session. Captures real OpenDroneID/DroneID
+    broadcasts over BLE (bleak) and/or WiFi monitor-mode (scapy) via ``rid_sniffer``;
+    when neither is importable a synthetic beacon drives the map + CoT path so the
+    chain is exercised offline. ``kind`` ∈ {f3411, dji}."""
+    from . import rid_sniffer
     sid = uuid.uuid4().hex[:12]
-    tools = available_tools()
-    chosen = [t for t in (("dji_droneid", "rid-decoder", "horus_droneid") if kind == "dji" else ("rid-decoder", "horus_droneid")) if tools.get(t)]
+    transport = "wifi" if kind == "dji" else "auto"   # DJI DroneID rides on WiFi
+    sniffer = rid_sniffer.RemoteIdSniffer(sid, transport=transport,
+                                          wifi_iface=wifi_iface, ble_adapter=ble_adapter)
+    active = sniffer.start()
+    base = ((device or {}).get("lat", 36.114), (device or {}).get("lon", -115.173)) \
+        if isinstance(device, dict) and device.get("lat") else (36.114, -115.173)
     sess = {"id": sid, "kind": kind, "device_id": (device or {}).get("id"), "frequency_hz": float(frequency_hz),
-            "label": label or ("DJI DroneID" if kind == "dji" else "ASTM F3411 Remote ID"), "started_ts": time.time(),
-            "metadata_url": f"/api/v1/uas/rid/sessions/{sid}/metadata"}
-    if chosen:
+            "label": label or ("DJI DroneID" if kind == "dji" else "ASTM F3411 Remote ID"),
+            "started_ts": time.time(), "metadata_url": f"/api/v1/uas/rid/sessions/{sid}/metadata",
+            "_base": base}
+    if active:
+        _RID_SNIFFERS[sid] = sniffer
         sess["status"] = "started"
-        sess["pipeline"] = chosen + (["dji_droneid:descramble" ] if kind == "dji" and "dji_droneid" in chosen else [])
-        sess["message"] = f"Receiving via {' → '.join(chosen)}."
+        sess["transports"] = active
+        sess["pipeline"] = [f"{t}:opendroneid" for t in active] + (["dji_droneid"] if kind == "dji" else [])
+        sess["message"] = f"Receiving live Remote ID over {' + '.join(active)} (OpenDroneID / F3411)."
     else:
-        sess["status"] = "tool_missing"
-        sess["pipeline"] = (["dji_droneid (OFDM RX + the published descramble key)"] if kind == "dji"
-                            else ["a WiFi-monitor / BT sniffer + a Remote-ID parser (rid-decoder / tshark with the OpenDroneID dissector)"])
-        sess["message"] = ("No Remote-ID receive tooling on $PATH — install " + sess["pipeline"][0]
-                           + " (and a SoapySDR/WiFi-NIC capture). Showing a synthetic beacon for the offline demo.")
-    sess["last"] = _synthetic_beacon(sess["started_ts"], *( (device or {}).get("lat", 36.114), (device or {}).get("lon", -115.173) ) if isinstance(device, dict) and device.get("lat") else (36.114, -115.173))
+        sess["status"] = "no_capture"
+        sess["transports"] = []
+        sess["pipeline"] = ["bleak (BLE OpenDroneID) and/or scapy + monitor-mode WiFi NIC"]
+        sess["message"] = ("No OTA capture backend available — `pip install bleak` for BLE Remote ID "
+                           "and/or `pip install scapy` with a monitor-mode WiFi adapter. "
+                           "Showing a synthetic beacon for the offline demo.")
+        sess["last"] = _synthetic_beacon(sess["started_ts"], *base)
     _RID_SESSIONS[sid] = sess
-    return dict(sess)
+    return {k: v for k, v in sess.items() if not k.startswith("_")}
 
 
 def rid_session_metadata(sid: str) -> Optional[dict]:
     s = _RID_SESSIONS.get(sid)
     if not s:
         return None
-    p = _synthetic_beacon(time.time(), *((36.114, -115.173)))
+    sniffer = _RID_SNIFFERS.get(sid)
+    if sniffer is not None:
+        live = sniffer.latest()
+        if live:
+            p = max(live, key=lambda b: b.get("_rid_ts", 0))   # most-recent track
+            s["last"] = p
+            fc = {"type": "FeatureCollection",
+                  "features": [f for b in live for f in rid_to_geojson(b).get("features", [])]}
+            return {"session_id": sid, "kind": s["kind"], "parsed": p, "summary": p.get("summary"),
+                    "live": True, "track_count": len(live), "stats": sniffer.stats(), "geojson": fc}
+        # sniffer running but nothing heard yet
+        return {"session_id": sid, "kind": s["kind"], "parsed": None, "summary": None,
+                "live": True, "track_count": 0, "stats": sniffer.stats(),
+                "geojson": {"type": "FeatureCollection", "features": []}}
+    # no capture backend → synthetic demo beacon
+    base = s.get("_base", (36.114, -115.173))
+    p = _synthetic_beacon(time.time(), *base)
     s["last"] = p
     return {"session_id": sid, "kind": s["kind"], "parsed": p, "summary": p.get("summary"),
-            "geojson": rid_to_geojson(p)}
+            "live": False, "geojson": rid_to_geojson(p)}
 
 
 def list_rid_sessions() -> list[dict]:
-    return [dict(s) for s in _RID_SESSIONS.values()]
+    return [{k: v for k, v in s.items() if not k.startswith("_")} for s in _RID_SESSIONS.values()]
 
 
 def stop_rid_session(sid: str) -> bool:
+    sniffer = _RID_SNIFFERS.pop(sid, None)
+    if sniffer is not None:
+        try: sniffer.stop()
+        except Exception: pass
     return _RID_SESSIONS.pop(sid, None) is not None
 
 
