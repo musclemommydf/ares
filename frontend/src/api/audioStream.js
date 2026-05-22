@@ -6,6 +6,8 @@
  * API (the AudioContext resamples the stream rate to the device output rate). A
  * small lead buffer absorbs network jitter; on underrun the playhead re-bases.
  */
+import { wsUrl } from './host'
+
 export class SdrAudioPlayer {
   constructor() {
     this.ws = null
@@ -19,12 +21,13 @@ export class SdrAudioPlayer {
 
   start(deviceId, { frequency_hz, mode = 'nfm', bandwidth_hz = null } = {}) {
     this.stop()
-    const base = (typeof window !== 'undefined' && window.location)
-      ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}` : 'ws://localhost:8000'
-    let url = `${base}/api/v1/sdr/devices/${encodeURIComponent(deviceId)}/audio/stream`
+    // Build the query, then let wsUrl() resolve the (possibly remote) backend host
+    // and append the auth token — so Listen works against an appliance the same as
+    // against localhost.
+    let path = `/api/v1/sdr/devices/${encodeURIComponent(deviceId)}/audio/stream`
       + `?frequency_hz=${encodeURIComponent(Math.round(frequency_hz))}&mode=${encodeURIComponent(mode)}`
-    if (bandwidth_hz) url += `&bandwidth_hz=${encodeURIComponent(Math.round(bandwidth_hz))}`
-    try { const t = localStorage.getItem('ares.token'); if (t) url += `&token=${encodeURIComponent(t)}` } catch { /* noop */ }
+    if (bandwidth_hz) path += `&bandwidth_hz=${encodeURIComponent(Math.round(bandwidth_hz))}`
+    const url = wsUrl(path)
 
     let ws
     try { ws = new WebSocket(url) } catch (e) { this.onState?.({ status: 'error', detail: String(e?.message || e) }); return }

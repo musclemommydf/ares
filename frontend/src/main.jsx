@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import ConnectGate from './components/Auth/ConnectGate'
 import './App.css'
 import 'leaflet/dist/leaflet.css'
 
@@ -19,6 +20,8 @@ L.Icon.Default.mergeOptions({
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    <ConnectGate>
+      <App />
+    </ConnectGate>
   </React.StrictMode>
 )

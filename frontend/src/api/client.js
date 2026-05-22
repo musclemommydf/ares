@@ -2,27 +2,43 @@
  * API client for the RF Propagation Simulator backend.
  */
 import axios from 'axios'
-
-const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1'
+import { apiBase, wsUrl } from './host'
 
 const api = axios.create({
-  baseURL: BASE_URL,
+  baseURL: apiBase(),
   timeout: 300000, // 5 min for large coverage computations
   headers: { 'Content-Type': 'application/json' },
 })
 
-// Attach the bearer token (saved at login under localStorage['ares.token']) to
-// every REST request, so the API works when ARES_AUTH is enabled (networked /
-// non-loopback deployments authenticate by default). The WebSocket carries the
-// same token as a ?token= query param — see createSdrSocket. Without this, an
-// auth-enabled backend answers every REST call with 401 "Missing bearer token".
+// Re-resolve the backend base + attach the bearer token (saved at login under
+// localStorage['ares.token']) on every REST request. Re-resolving means a remote
+// host picked on the Connect screen takes effect without a reload, and auth works
+// when ARES_AUTH is enabled (networked deployments authenticate by default). The
+// WebSockets carry the same token via ?token= — see api/host.js wsUrl(). Without
+// this, an auth-enabled backend answers every REST call with 401.
 api.interceptors.request.use((config) => {
   try {
+    config.baseURL = apiBase()
     const t = (typeof localStorage !== 'undefined') && localStorage.getItem('ares.token')
     if (t) config.headers = { ...(config.headers || {}), Authorization: `Bearer ${t}` }
   } catch { /* localStorage unavailable (SSR / privacy mode) — send unauthenticated */ }
   return config
 })
+
+// If a token expires mid-session, drop it and reload so ConnectGate re-prompts.
+// Guarded on "a token was present" so the unauthenticated/gate path can't loop.
+api.interceptors.response.use(
+  (r) => r,
+  (error) => {
+    try {
+      if (error?.response?.status === 401 && localStorage.getItem('ares.token')) {
+        localStorage.removeItem('ares.token')
+        if (typeof window !== 'undefined') window.location.reload()
+      }
+    } catch { /* ignore */ }
+    return Promise.reject(error)
+  },
+)
 
 // ── Core simulation endpoints ────────────────────────────────────────────────
 
@@ -265,8 +281,7 @@ export async function getMaterials() {
 // ── WebSocket for real-time simulation ──────────────────────────────────────
 
 export function createSimulationSocket(params, onProgress, onResult, onError) {
-  const wsBase = BASE_URL.replace('/api/v1', '').replace('http', 'ws')
-  const ws = new WebSocket(`${wsBase}/api/v1/ws/simulate`)
+  const ws = new WebSocket(wsUrl('/api/v1/ws/simulate'))
 
   ws.onopen = () => {
     ws.send(JSON.stringify(params))
@@ -523,13 +538,7 @@ const WS_CLOSE_REASON = {
 
 export function createSdrSocket(onMessage, onError = () => {}) {
   let ws = null, closed = false, backoff = 1000, retryTimer = null
-  const url = (() => {
-    const base = (typeof window !== 'undefined' && window.location)
-      ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}` : 'ws://localhost:8000'
-    let u = `${base}/api/v1/sdr/stream`
-    try { const t = (typeof localStorage !== 'undefined') && localStorage.getItem('ares.token'); if (t) u += `?token=${encodeURIComponent(t)}` } catch { /* noop */ }
-    return u
-  })()
+  const url = wsUrl('/api/v1/sdr/stream')
   const open = () => {
     try { ws = new WebSocket(url) } catch (e) { onError({ kind: 'exception', detail: String(e?.message || e) }); return scheduleRetry() }
     ws.onmessage = (ev) => {

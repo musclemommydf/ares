@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     port: int = int(os.getenv("PORT", "8000"))
     cors_origins: list[str] = ["*"]
 
+    # Built web UI to serve at "/" so any device on the network can drive Ares
+    # from a browser (http://<host>:<port>/). Defaults to the repo's frontend/dist;
+    # override with ARES_FRONTEND_DIST (e.g. a copied build on an SDR appliance).
+    frontend_dist: str = os.getenv(
+        "ARES_FRONTEND_DIST",
+        str(Path(__file__).resolve().parents[2] / "frontend" / "dist"),
+    )
+
     # Authentication (Workstream A.1). ARES_AUTH = true | false | auto (default).
     # 'auto' ⇒ ON unless bound to loopback — networked deployments are authenticated
     # by default; localhost dev is open. Force either way with true/false.

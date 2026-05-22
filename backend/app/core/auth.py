@@ -99,8 +99,21 @@ def _save_users(users: dict[str, User]) -> None:
 
 
 def ensure_default_user() -> None:
-    """Create a random-password ``admin`` if the user store is empty."""
+    """Ensure an ``admin`` account exists.
+
+    Headless/appliance deployments set ``ARES_ADMIN_PASSWORD`` so the operator can
+    log in over the network without scraping the boot log — that pins (creates or
+    updates) the admin password every start. Otherwise, if the store is empty, a
+    random-password admin is created and logged once."""
     users = _load_users()
+    env_pw = os.environ.get("ARES_ADMIN_PASSWORD", "").strip()
+    if env_pw:
+        existing = users.get("admin")
+        if existing is None or not verify_password(env_pw, existing.password_hash):
+            users["admin"] = User("admin", hash_password(env_pw), role="admin")
+            _save_users(users)
+            log.info("admin password set from ARES_ADMIN_PASSWORD (stored hashed in %s)", USERS_FILE)
+        return
     if users:
         return
     pw = secrets.token_urlsafe(12)

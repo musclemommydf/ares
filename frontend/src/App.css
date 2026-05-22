@@ -656,4 +656,51 @@
 .leaflet-popup-content a { color: #58a6ff; }
 .leaflet-popup-tip { background: #161b22; border: 1px solid #30363d; box-shadow: none; }
 .leaflet-popup-close-button { color: #8b949e !important; }
+
+/* ── Responsive: phones / tablets (remote control from a small screen) ────────
+   The desktop layout is a fixed 360px sidebar + map + bottom panel grid. On a
+   narrow screen that's unusable, so stack the three areas into one scrolling
+   column: header (sticky) → map → controls → results/DF. The map and bottom
+   panel keep explicit heights so their inner canvases/charts still size right;
+   the controls column flows naturally. */
+@media (max-width: 820px) {
+  html, body, #root { height: auto; overflow: auto; }
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--header-height) 52vh auto 78vh;
+    grid-template-areas:
+      "header"
+      "map"
+      "sidebar"
+      "bottom";
+    height: auto;
+    min-height: 100dvh;
+    width: 100%;
+    overflow: visible;
+  }
+  .app-header {
+    position: sticky;
+    top: 0;
+    overflow-x: auto;          /* let the tab/action row scroll instead of clipping */
+    scrollbar-width: none;
+  }
+  .app-header::-webkit-scrollbar { display: none; }
+  .map-container { height: 52vh; min-height: 300px; }
+  .app-sidebar {
+    grid-area: sidebar;
+    border-right: none;
+    border-top: 1px solid var(--border);
+    max-height: none;
+  }
+  .bottom-panel { height: 78vh; min-height: 420px; }
+  /* Roomier tap targets on touch screens */
+  .btn, button, select, input { min-height: 38px; }
+}
+
+/* Very small phones: drop the map height a touch and keep panels reachable. */
+@media (max-width: 480px) {
+  .app { grid-template-rows: var(--header-height) 46vh auto 80vh; }
+  .map-container { height: 46vh; }
+  :root { --panel-width: 100vw; }
+}
 .leaflet-popup-close-button:hover { color: #e6edf3 !important; }

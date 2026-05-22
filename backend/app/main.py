@@ -208,14 +208,51 @@ app.include_router(uas_router, prefix="/api/v1")
 app.include_router(osint_router, prefix="/api/v1")
 
 
-@app.get("/")
-async def root():
-    return {
-        "name": settings.app_name,
-        "version": settings.app_version,
-        "docs": "/docs",
-        "api": "/api/v1",
-    }
+_API_INFO = {
+    "name": settings.app_name,
+    "version": settings.app_version,
+    "docs": "/docs",
+    "api": "/api/v1",
+}
+
+
+@app.get("/api")
+async def api_info():
+    return _API_INFO
+
+
+# Serve the built web UI at "/" so any device on the network (laptop / phone /
+# tablet) can drive Ares from a browser at http://<host>:<port>/. It loads
+# same-origin, so the existing relative /api/v1 + WebSocket calls Just Work and
+# ARES_AUTH protects the whole surface. Registered AFTER the API routers, so they
+# always win; this catch-all only handles SPA + static assets.
+from pathlib import Path as _Path  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+_DIST = _Path(settings.frontend_dist)
+if _DIST.is_dir() and (_DIST / "index.html").is_file():
+    for _sub in ("assets", "cesium"):
+        _d = _DIST / _sub
+        if _d.is_dir():
+            app.mount(f"/{_sub}", StaticFiles(directory=str(_d)), name=_sub)
+
+    @app.get("/{full_path:path}")
+    async def spa(full_path: str):
+        if full_path.startswith(("api/", "api", "docs", "redoc", "openapi.json")):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        f = _DIST / full_path
+        if full_path and f.is_file():
+            return FileResponse(str(f))
+        return FileResponse(str(_DIST / "index.html"))   # SPA entry / client routes
+
+    log.info("serving web UI from %s", _DIST)
+else:
+    @app.get("/")
+    async def root():
+        return _API_INFO
+
+    log.warning("no built web UI at %s — API only (run `npm run build` in frontend/)", _DIST)
 
 
 if __name__ == "__main__":
