@@ -32,6 +32,7 @@ creation raises a clear, caught error and the rest of Ares is unaffected.
 """
 from __future__ import annotations
 
+import errno
 import fcntl
 import logging
 import os
@@ -57,53 +58,129 @@ _IFF_NO_PI = 0x1000          # no 4-byte packet-info prefix on each frame
 _TUN_CLONE = "/dev/net/tun"
 _DEFAULT_MTU = 1400          # leave headroom under the modem's 2048-byte max frame
 
+# The privileged helper install.sh drops in /usr/local/sbin with a NOPASSWD
+# sudoers rule. When the backend itself lacks CAP_NET_ADMIN (the default — we run
+# unprivileged), it shells out to this via `sudo -n` to create a *persistent,
+# caller-owned* TAP/TUN, which the backend can then attach to with no privilege.
+_NIC_HELPER = "/usr/local/sbin/ares-nic-helper"
+
+
+def _helper_available() -> bool:
+    """True if the privileged netdev helper is installed and runnable via
+    passwordless sudo (i.e. install.sh wired the sudoers rule). Cheap + cached
+    per call; the `check` subcommand only exits 0/non-0."""
+    if not os.path.exists(_NIC_HELPER):
+        return False
+    try:
+        r = subprocess.run(["sudo", "-n", _NIC_HELPER, "check"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _resolve_ifname(template: str) -> str:
+    """Pick a concrete free `ares-nicN` name. The kernel auto-numbers `%d` on the
+    direct (CAP_NET_ADMIN) path, but `ip tuntap add` needs a concrete name, so the
+    helper path resolves one against the interfaces that already exist."""
+    if "%d" not in template:
+        return template
+    try:
+        existing = set(os.listdir("/sys/class/net"))
+    except OSError:
+        existing = set()
+    for i in range(0, 1000):
+        cand = template.replace("%d", str(i))
+        if cand not in existing:
+            return cand
+    return template.replace("%d", "0")
+
 
 def tap_supported() -> tuple[bool, str]:
-    """Whether this host can actually create a TAP/TUN interface — probed, not
-    guessed: open /dev/net/tun and try a transient TUNSETIFF, then close. R/W
-    on the device node isn't enough; the ioctl itself needs CAP_NET_ADMIN."""
+    """Whether this host can bring up a TAP/TUN interface — probed, not guessed.
+    Two ways it can work, in order:
+      1. the backend itself holds CAP_NET_ADMIN (open /dev/net/tun + a transient
+         TUNSETIFF succeeds) — e.g. run as root or with the cap granted; or
+      2. the privileged ``ares-nic-helper`` is installed + sudo-able (the default
+         out-of-the-box path — install.sh sets it up), which creates a persistent
+         caller-owned device the unprivileged backend then attaches to.
+    Returns (ok, reason) where reason names the working path or why neither is."""
     if os.name != "posix" or not os.path.exists(_TUN_CLONE):
         return False, f"{_TUN_CLONE} not present (TAP/TUN is Linux-only)"
-    if not os.access(_TUN_CLONE, os.R_OK | os.W_OK):
-        return False, f"no read/write access to {_TUN_CLONE} (need CAP_NET_ADMIN or root)"
-    try:
-        fd = os.open(_TUN_CLONE, os.O_RDWR)
-    except OSError as e:
-        return False, f"cannot open {_TUN_CLONE}: {e}"
-    try:
-        ifr = struct.pack("16sH", b"ares-probe%d", _IFF_TAP | _IFF_NO_PI)
-        fcntl.ioctl(fd, _TUNSETIFF, ifr)
-        return True, "ok"
-    except OSError as e:
-        return False, f"TUNSETIFF not permitted ({e}); run the backend with CAP_NET_ADMIN or as root"
-    finally:
-        os.close(fd)
+    # 1) direct — does the backend have the capability itself?
+    if os.access(_TUN_CLONE, os.R_OK | os.W_OK):
+        try:
+            fd = os.open(_TUN_CLONE, os.O_RDWR)
+        except OSError:
+            fd = None
+        if fd is not None:
+            try:
+                ifr = struct.pack("16sH", b"ares-nic%d", _IFF_TAP | _IFF_NO_PI)
+                fcntl.ioctl(fd, _TUNSETIFF, ifr)
+                return True, "ok (backend holds CAP_NET_ADMIN)"
+            except OSError as e:
+                if e.errno != errno.EPERM:
+                    return False, f"cannot create TAP/TUN: {e}"
+                # EPERM → fall through to the helper
+            finally:
+                os.close(fd)
+    # 2) privileged helper via passwordless sudo (the installed default)
+    if _helper_available():
+        return True, "ok (privileged ares-nic-helper)"
+    return False, ("TAP/TUN needs CAP_NET_ADMIN — run install.sh to set up the privileged "
+                   "ares-nic-helper (passwordless sudo, scoped to ares-nic* only), or run the "
+                   "backend as root / with cap_net_admin.")
 
 
 class TapDevice:
     """A Linux TAP (layer-2) or TUN (layer-3) virtual interface."""
 
     def __init__(self, name: str = "ares-nic%d", mode: str = "tap",
-                 mtu: int = _DEFAULT_MTU):
+                 mtu: int = _DEFAULT_MTU, ip_cidr: Optional[str] = None, up: bool = True):
         ok, why = tap_supported()
         if not ok:
             raise RuntimeError(why)
         self.mode = "tun" if mode.lower() == "tun" else "tap"
+        self.mtu = int(mtu)
+        self.ifname = ""
+        self.config_warning = ""
+        self._via = ""               # "cap" | "helper" — how the device was created
+        self._closed = False
         flags = (_IFF_TUN if self.mode == "tun" else _IFF_TAP) | _IFF_NO_PI
         self._fd = os.open(_TUN_CLONE, os.O_RDWR)
+        # 1) try the direct path (backend holds CAP_NET_ADMIN)
         try:
             ifr = struct.pack("16sH", name.encode()[:15], flags)
             res = fcntl.ioctl(self._fd, _TUNSETIFF, ifr)
+            self.ifname = res[:16].rstrip(b"\x00").decode(errors="replace")
+            self._via = "cap"
+            self.config_warning = self._configure_direct(ip_cidr, up) or ""
+            return
+        except OSError as e:
+            if e.errno != errno.EPERM or not _helper_available():
+                os.close(self._fd)
+                raise RuntimeError(f"TUNSETIFF failed ({e}); need CAP_NET_ADMIN/root or the ares-nic-helper") from e
+        # 2) helper path — create a persistent, caller-owned device (root, via the
+        #    scoped sudoers helper), then attach to it here with no privilege.
+        concrete = _resolve_ifname(name)
+        argv = ["sudo", "-n", _NIC_HELPER, "up", self.mode, concrete, str(os.getuid()), str(self.mtu)]
+        if ip_cidr:
+            argv.append(ip_cidr)
+        try:
+            subprocess.run(argv, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
+        except subprocess.CalledProcessError as e:
+            os.close(self._fd)
+            msg = (e.stderr or b"").decode(errors="replace").strip() or "ares-nic-helper failed"
+            raise RuntimeError(f"helper could not bring up {concrete}: {msg}") from e
+        try:
+            ifr = struct.pack("16sH", concrete.encode()[:15], flags)
+            fcntl.ioctl(self._fd, _TUNSETIFF, ifr)     # attach (allowed: persistent + caller-owned)
         except OSError as e:
             os.close(self._fd)
-            raise RuntimeError(f"TUNSETIFF failed ({e}); need CAP_NET_ADMIN/root") from e
-        self.ifname = res[:16].rstrip(b"\x00").decode(errors="replace")
-        self.mtu = int(mtu)
-        self._closed = False
-        try:
-            self._ip("link", "set", "dev", self.ifname, "mtu", str(self.mtu))
-        except Exception:
-            pass
+            self._helper_down(concrete)
+            raise RuntimeError(f"could not attach to {concrete} ({e})") from e
+        self.ifname = concrete
+        self._via = "helper"
 
     # ── frame I/O ─────────────────────────────────────────────────────────────
     def read(self, n: int = 4096) -> bytes:
@@ -116,17 +193,18 @@ class TapDevice:
     def fileno(self) -> int:
         return self._fd
 
-    # ── interface config (best-effort; needs CAP_NET_ADMIN) ──────────────────
+    # ── interface config ──────────────────────────────────────────────────────
     def _ip(self, *args: str) -> None:
         subprocess.run(["ip", *args], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-    def configure(self, ip_cidr: Optional[str] = None, up: bool = True) -> Optional[str]:
-        """Assign an address and/or bring the link up. Returns an error string
-        on failure (caller surfaces it) or None on success."""
+    def _configure_direct(self, ip_cidr: Optional[str], up: bool) -> Optional[str]:
+        """CAP_NET_ADMIN path: set mtu/addr/up via `ip` directly. Returns an error
+        string on failure (surfaced as a warning) or None."""
         try:
+            self._ip("link", "set", "dev", self.ifname, "mtu", str(self.mtu))
             if ip_cidr:
-                self._ip("addr", "add", ip_cidr, "dev", self.ifname)
+                self._ip("addr", "replace", ip_cidr, "dev", self.ifname)
             if up:
                 self._ip("link", "set", "dev", self.ifname, "up")
             return None
@@ -135,6 +213,18 @@ class TapDevice:
         except Exception as e:
             return str(e)
 
+    def configure(self, ip_cidr: Optional[str] = None, up: bool = True) -> Optional[str]:
+        """Back-compat shim: addressing + link-up now happen in __init__ (both the
+        cap and helper paths), so this just reports any warning captured then."""
+        return self.config_warning or None
+
+    def _helper_down(self, ifname: str) -> None:
+        try:
+            subprocess.run(["sudo", "-n", _NIC_HELPER, "down", ifname],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        except Exception:
+            pass
+
     def close(self) -> None:
         if not self._closed:
             self._closed = True
@@ -142,6 +232,10 @@ class TapDevice:
                 os.close(self._fd)
             except Exception:
                 pass
+            # a helper-created device is *persistent* — tear it down explicitly
+            # (the cap path's device is auto-removed when the fd closes).
+            if self._via == "helper" and self.ifname:
+                self._helper_down(self.ifname)
 
 
 @dataclass
@@ -210,10 +304,11 @@ class SdrNic:
                 pass
         self._driver = drv
         self.tx_capable = bool(getattr(drv.capabilities, "tx_capable", False))
-        # 2) create the kernel interface
-        self._tap = TapDevice(self.requested_ifname, self.mode, self.mtu)
+        # 2) create the kernel interface (directly if we hold CAP_NET_ADMIN, else
+        #    via the scoped sudo helper) — addressing + link-up happen in here too.
+        self._tap = TapDevice(self.requested_ifname, self.mode, self.mtu, ip_cidr=self.ip_cidr, up=True)
         self.ifname = self._tap.ifname
-        warn = self._tap.configure(self.ip_cidr, up=True)
+        warn = self._tap.configure()
         if warn:
             self.config_warning = warn
             log.warning("nic %s: interface config: %s", self.ifname, warn)

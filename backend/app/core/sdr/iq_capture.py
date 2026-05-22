@@ -61,6 +61,7 @@ DRIVER_FOR_KIND: dict[str, str] = {
     # other common SDRs Soapy handles
     "hackrf": "hackrf", "airspy": "airspy", "airspyhf": "airspyhf",
     "lime": "lime", "limesdr": "lime", "pluto": "plutosdr", "adalm": "plutosdr",
+    "antsdr": "plutosdr",                     # ANTSDR E200 — AD9361 board, speaks the Pluto/libiio manifold
     "bladerf": "bladerf", "blade": "bladerf",
 }
 
@@ -75,24 +76,47 @@ def available() -> bool:
 
 def soapy_args_for(device: Optional[dict]) -> str:
     """Build a SoapySDR device-args string from a registered device dict. Honours an explicit
-    ``metadata.soapy`` args string, else maps the device's type/kind/model to a driver, else
-    returns "" (Soapy picks the first device it finds)."""
+    ``metadata.soapy`` args string, else maps the device's type/kind/model/built-in-driver to a
+    SoapySDR driver, else returns "" (Soapy picks the first device it finds).
+
+    Crucially this also resolves the built-in-driver flow: a Pluto added under
+    "Direction finding — built-in driver" carries ``metadata.driver_id="plutosdr"``
+    (and maybe ``metadata.driver_args.uri``) but no explicit ``soapy`` string — without
+    this its spectrum would open the *first* enumerated SDR (or none) and fall back to
+    the synthetic placeholder."""
     md = (device or {}).get("metadata") or {}
     explicit = (md.get("soapy") or "").strip()
     if explicit:
         return explicit
+    drv_args = md.get("driver_args") or {}
+
+    def _with_extras(args: str) -> str:
+        sn = md.get("serial") or (device or {}).get("serial")
+        if sn:
+            args += f",serial={sn}"
+        # a Pluto/ANTSDR URI (ip:… / usb:…) targets a specific board via SoapyPlutoSDR
+        uri = (drv_args.get("uri") or "").strip()
+        if uri and "plutosdr" in args:
+            args += f",uri={uri}"
+        return args
+
+    # 1) authoritative: the built-in driver id / explicit driver name. Checked first so
+    #    a device merely *named* "Kraken-1" can't hijack a plutosdr's driver_id via the
+    #    fuzzy blob below ("kraken" → rtlsdr).
+    for cand in (md.get("driver_id"), md.get("driver")):
+        c = str(cand or "").lower()
+        if not c:
+            continue
+        if c in _KNOWN_DRIVERS:
+            return _with_extras(f"driver={c}")
+        for token, drv in DRIVER_FOR_KIND.items():   # e.g. "uhd_usrp" → uhd, "antsdr_e200" → plutosdr
+            if token in c:
+                return _with_extras(f"driver={drv}")
+    # 2) fuzzy: the device's type / kind / model / name
     blob = " ".join(str(device.get(k, "")) for k in ("type", "kind", "model", "name", "driver")).lower() if device else ""
-    blob += " " + str(md.get("driver", "")).lower()
     for token, drv in DRIVER_FOR_KIND.items():
         if token in blob:
-            args = f"driver={drv}"
-            sn = md.get("serial") or (device or {}).get("serial")
-            if sn:
-                args += f",serial={sn}"
-            return args
-    # raw driver token in metadata?
-    if md.get("driver") in _KNOWN_DRIVERS:
-        return f"driver={md['driver']}"
+            return _with_extras(f"driver={drv}")
     return ""
 
 

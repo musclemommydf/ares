@@ -372,10 +372,16 @@ async def device_spectrum(device_id: str, center_hz: Optional[float] = None,
     c = float(center_hz) if center_hz else float(dev.frequency_hz or 100e6)
     nch = max(1, int(getattr(dev, "channels", 1)))
     ch = max(0, min(nch - 1, int(channel)))
-    # Prefer the real PSD from a running driver-backed (live_df) adapter — this is
-    # what makes a configured Pluto's actual RF show instead of the synthetic
-    # placeholder when SoapySDR isn't installed (the live path runs over pyadi/libiio).
+    # Spectrum source precedence, real RF first:
+    #  1) a running driver-backed (live_df) adapter's latest capture;
+    #  2) an on-demand open of the device's built-in driver when no adapter runs
+    #     (a configured-but-idle Pluto/USRP shows actual RF over pyadi/libiio — run
+    #     in an executor since the capture blocks);
+    #  3) the SoapySDR provider / synthetic placeholder via dsp.spectrum_frame.
     fr = sdr_manager.device_spectrum(device_id, c, span_hz, n_bins, ch)
+    if fr is None:
+        fr = await asyncio.get_event_loop().run_in_executor(
+            None, sdr_manager.ondemand_spectrum, device_id, c, span_hz, n_bins, ch)
     if fr is None:
         fr = dsp.spectrum_frame(dev.public(), c, span_hz, n_bins, ch)
     fr["device_id"] = device_id

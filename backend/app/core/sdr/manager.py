@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
 import uuid
 from collections import deque
@@ -45,6 +46,33 @@ _FIX_HISTORY_MAX = 64          # ring of recent fix-summary events
 _FREQ_BUCKET_HZ = 5_000.0      # group LoBs into 5 kHz bins for matching
 _DEFAULT_LOB_TTL_S = 90.0      # an LoB stops contributing to fixes after this
 _AUTO_COVERAGE_COOLDOWN_S = 8.0
+_SPECTRUM_DRIVER_TTL_S = 12.0  # close an idle on-demand spectrum driver after this
+
+
+def _welch_psd_per_ch(X, n_bins: int) -> list:
+    """Averaged (Welch) PSD in ~dBm for each channel of an (M, N) complex IQ block,
+    each fftshift'd to length ``n_bins`` over the capture band. Mirrors the live-DF /
+    SoapySDR PSD so an on-demand capture renders identically in the DF panel."""
+    import numpy as np
+    win = np.hanning(n_bins)
+    wpow = float(np.sum(win ** 2)) or 1.0
+    out = []
+    for ch in range(X.shape[0]):
+        x = X[ch]
+        nseg = max(1, len(x) // n_bins)
+        acc = np.zeros(n_bins); cnt = 0
+        for i in range(nseg):
+            seg = x[i * n_bins:(i + 1) * n_bins]
+            if len(seg) < n_bins:
+                break
+            acc += np.abs(np.fft.fftshift(np.fft.fft(seg * win))) ** 2
+            cnt += 1
+        if cnt == 0:
+            seg = np.zeros(n_bins, dtype=np.complex64); seg[:len(x)] = x[:n_bins]
+            acc = np.abs(np.fft.fftshift(np.fft.fft(seg * win))) ** 2; cnt = 1
+        p = acc / (cnt * wpow)
+        out.append(10.0 * np.log10(np.maximum(p, 1e-20)) - 30.0)   # ~dBm into 50 Ω
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,6 +176,11 @@ class SDRManager:
         self._gps: Optional[dict] = None        # last live GPS fix (operator position)
         self._started = False
         self._lock = asyncio.Lock()
+        # on-demand spectrum: registry drivers opened for devices with no running
+        # adapter, kept warm across the DF panel's poll. Guarded by a threading.Lock
+        # because the capture runs in the endpoint's executor (parallel per channel).
+        self._spectrum_drivers: dict[str, dict] = {}
+        self._spectrum_lock = threading.Lock()
         self._load()
 
     # ── persistence ──────────────────────────────────────────────────────────
@@ -208,11 +241,15 @@ class SDRManager:
                 pass
         self._adapters.clear()
         self._adapter_objs.clear()
+        with self._spectrum_lock:
+            for did in list(self._spectrum_drivers):
+                self._close_spectrum_driver(did)
         log.info("SDR manager stopped")
 
     def _spawn(self, dev: SDRDevice) -> None:
         if dev.id in self._adapters:
             return
+        self._release_spectrum_driver(dev.id)   # hand the radio to the adapter
         adapter = self._make_adapter(dev)
         task = asyncio.create_task(adapter.run(), name=f"sdr:{dev.id}")
         self._adapters[dev.id] = task
@@ -241,6 +278,114 @@ class SDRManager:
         except Exception:
             log.debug("device_spectrum failed for %s", device_id, exc_info=True)
             return None
+
+    # ── on-demand spectrum (built-in-driver device with no running adapter) ──────
+    def ondemand_spectrum(self, device_id: str, center_hz: float, span_hz: float,
+                          n_bins: int, channel: int) -> Optional[dict]:
+        """Capture a real PSD *on demand* from a built-in-driver device (Pluto/USRP/…)
+        that isn't currently running a DF adapter — opens the registry driver, grabs a
+        short block, and keeps the handle warm so the DF panel's poll reuses it. This is
+        what makes a configured Pluto's actual RF show even when SoapySDR isn't installed
+        and DF isn't running (the open goes over pyadi/libiio).
+
+        Returns None when the device has no built-in driver, an adapter already owns the
+        radio, or the driver can only offer synthetic IQ — the caller then falls back to
+        ``dsp.spectrum_frame`` (which labels the synthetic placeholder honestly).
+        BLOCKING: call from an executor, not the event loop."""
+        dev = self._devices.get(device_id)
+        if dev is None:
+            return None
+        md = dev.metadata or {}
+        driver_id = md.get("driver_id")
+        if not driver_id:
+            return None                       # external-pipeline device — no local radio
+        if device_id in self._adapter_objs:
+            return None                       # a running adapter owns the device; don't contend
+        n_bins = max(64, min(8192, int(n_bins)))
+        span_hz = max(1e3, float(span_hz))
+        with self._spectrum_lock:
+            self._evict_spectrum_drivers()
+            try:
+                import numpy as np
+                entry = self._spectrum_drivers.get(device_id)
+                if entry is None:
+                    from app.core.sdr import drivers
+                    kwargs = dict(md.get("driver_args") or {})
+                    kwargs.setdefault("channels", int(dev.channels or 1))
+                    drv = drivers.create(driver_id, **kwargs)
+                    drv.open()
+                    backend = str(getattr(drv, "_backend", None) or driver_id)
+                    entry = {"driver": drv, "backend": backend, "freq": None, "rate": None,
+                             "gain": "<unset>", "cache": None, "cache_t": 0.0, "cache_key": None}
+                    self._spectrum_drivers[device_id] = entry
+                drv, backend = entry["driver"], entry["backend"]
+                if backend == "synthetic":
+                    return None               # nothing real to show — let the synthetic path label it
+                rate = float(md.get("sample_rate_hz") or max(2.4e6, span_hz))
+                gain = md.get("gain_db", None)
+                if entry["rate"] != rate:
+                    drv.set_sample_rate(rate); entry["rate"] = rate
+                if entry["freq"] != center_hz:
+                    drv.set_frequency(center_hz); entry["freq"] = center_hz
+                if gain is not None and entry["gain"] != gain:
+                    drv.set_gain(float(gain)); entry["gain"] = gain
+                entry["last_used"] = time.time()
+                # reuse a fresh capture across the panel's parallel per-channel poll
+                key = (round(center_hz), round(rate), n_bins)
+                if not (entry["cache"] is not None and entry["cache_key"] == key
+                        and time.time() - entry["cache_t"] < 0.5):
+                    frame = drv.read_iq(max(n_bins * 4, 4096))
+                    X = np.asarray(frame.samples)
+                    if X.ndim == 1:
+                        X = X.reshape(1, -1)
+                    entry["cache"] = _welch_psd_per_ch(X, n_bins)
+                    entry["cache_t"] = time.time(); entry["cache_key"] = key
+                psd_by_ch = entry["cache"]
+                if not psd_by_ch:
+                    return None
+                ch = max(0, min(len(psd_by_ch) - 1, int(channel)))
+                psd = np.asarray(psd_by_ch[ch], dtype=float)
+                out_span = rate
+                if span_hz < rate:                       # crop to the centre of the captured band
+                    keep = max(2, int(round(len(psd) * span_hz / rate)))
+                    lo = (len(psd) - keep) // 2
+                    psd = psd[lo:lo + keep]; out_span = span_hz
+                if len(psd) != n_bins:
+                    psd = np.interp(np.linspace(0, len(psd) - 1, n_bins), np.arange(len(psd)), psd)
+                peak_i = int(np.argmax(psd))
+                f0 = float(center_hz) - out_span / 2.0
+                return {
+                    "source": "hardware", "backend": backend, "driver": driver_id, "channel": ch,
+                    "center_hz": float(center_hz), "span_hz": float(out_span), "n_bins": n_bins,
+                    "sample_rate_hz": rate, "power_dbm": [round(float(v), 2) for v in psd],
+                    "noise_floor_dbm": round(float(np.percentile(psd, 20.0)), 2),
+                    "peak_hz": round(f0 + (peak_i / max(1, n_bins - 1)) * out_span, 1),
+                    "peak_dbm": round(float(psd[peak_i]), 2), "t": time.time(),
+                }
+            except Exception:
+                log.debug("ondemand_spectrum failed for %s", device_id, exc_info=True)
+                self._close_spectrum_driver(device_id)   # caller holds the lock
+                return None
+
+    def _evict_spectrum_drivers(self, ttl_s: float = _SPECTRUM_DRIVER_TTL_S) -> None:
+        """Close on-demand spectrum drivers idle past the TTL. Caller holds the lock."""
+        now = time.time()
+        for did in [d for d, e in self._spectrum_drivers.items() if now - e.get("last_used", 0) > ttl_s]:
+            self._close_spectrum_driver(did)
+
+    def _close_spectrum_driver(self, device_id: str) -> None:
+        """Close + drop one cached spectrum driver. Caller holds the lock."""
+        entry = self._spectrum_drivers.pop(device_id, None)
+        if entry and entry.get("driver") is not None:
+            try:
+                entry["driver"].close()
+            except Exception:
+                pass
+
+    def _release_spectrum_driver(self, device_id: str) -> None:
+        """Lock-acquiring wrapper for callers on the event-loop thread (spawn/kill)."""
+        with self._spectrum_lock:
+            self._close_spectrum_driver(device_id)
 
     def set_auto_coverage_runner(self, runner: Callable[[dict], Awaitable[None]]) -> None:
         """Inject a coroutine the manager calls with each new fix when the group's
@@ -299,6 +444,7 @@ class SDRManager:
         if device_id not in self._devices:
             return False
         self._kill(device_id)
+        self._release_spectrum_driver(device_id)
         del self._devices[device_id]
         self._save()
         return True

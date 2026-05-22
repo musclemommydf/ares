@@ -476,6 +476,17 @@ export async function sendChatMessage(body)        { const { data } = await api.
 
 /** Open a WebSocket to /sdr/stream and dispatch events to `onMessage`. Returns
  * a `{ close }` handle. Auto-reconnects with exponential backoff. */
+// Human-readable cause for a WebSocket close code (RFC 6455 + common usage), so
+// the SDR console's event log shows *why* the stream dropped, not just "error".
+const WS_CLOSE_REASON = {
+  1000: 'normal close', 1001: 'endpoint going away', 1002: 'protocol error',
+  1003: 'unsupported data', 1005: 'no status received',
+  1006: 'abnormal close — server unreachable or network dropped (no close frame)',
+  1007: 'invalid frame payload', 1008: 'policy violation — auth rejected or token expired?',
+  1009: 'message too big', 1010: 'required extension missing', 1011: 'server internal error',
+  1012: 'server restarting', 1013: 'try again later', 1015: 'TLS handshake failed',
+}
+
 export function createSdrSocket(onMessage, onError = () => {}) {
   let ws = null, closed = false, backoff = 1000, retryTimer = null
   const url = (() => {
@@ -486,12 +497,21 @@ export function createSdrSocket(onMessage, onError = () => {}) {
     return u
   })()
   const open = () => {
-    try { ws = new WebSocket(url) } catch (e) { onError(e); return scheduleRetry() }
+    try { ws = new WebSocket(url) } catch (e) { onError({ kind: 'exception', detail: String(e?.message || e) }); return scheduleRetry() }
     ws.onmessage = (ev) => {
       try { onMessage(JSON.parse(ev.data)) } catch { /* ignore non-JSON */ }
     }
-    ws.onerror = onError
-    ws.onclose = () => { if (!closed) scheduleRetry() }
+    // The browser `error` event carries no useful detail (intentionally), so the
+    // real cause comes from `close` (code + reason); report it from there.
+    ws.onerror = () => onError({ kind: 'error', detail: 'socket error' })
+    ws.onclose = (ev) => {
+      if (closed) return
+      const code = ev?.code
+      const reason = (ev?.reason || '').trim() || WS_CLOSE_REASON[code] || 'connection closed'
+      onError({ kind: 'close', code, reason, wasClean: !!ev?.wasClean,
+                detail: code != null ? `code ${code}: ${reason}` : reason })
+      scheduleRetry()
+    }
     ws.onopen = () => { backoff = 1000 }
   }
   const scheduleRetry = () => {

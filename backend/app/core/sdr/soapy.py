@@ -92,7 +92,14 @@ def _psd(samples: np.ndarray, fs: float, n_bins: int) -> np.ndarray:
 def _provider(device: dict, center_hz: float, span_hz: float, n_bins: int, channel: int) -> Optional[dict]:
     if not _HAVE:
         return None
-    args = ((device.get("metadata") or {}).get("soapy") or "").strip()
+    # Resolve the SoapySDR device args from the registered device — an explicit
+    # metadata.soapy string, else the device's kind/model/built-in driver_id (so a
+    # Pluto added via the built-in-driver flow opens the *Pluto*, not the first SDR).
+    try:
+        from . import iq_capture
+        args = iq_capture.soapy_args_for(device)
+    except Exception:
+        args = ((device.get("metadata") or {}).get("soapy") or "").strip()
     ch = max(0, int(channel))
     fs = max(2e5, min(_SAMP_RATE if span_hz <= _SAMP_RATE else span_hz, 30e6))
     try:

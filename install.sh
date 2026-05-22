@@ -773,6 +773,30 @@ EOF
             ok "User $TARGET_USER is already in the SDR-relevant groups."
         fi
     fi
+
+    # ── SDR-as-NIC privilege (TAP/TUN over RF) ──────────────────────────────
+    # Creating a kernel TAP/TUN interface needs CAP_NET_ADMIN. Rather than run
+    # the whole backend as root, install a tiny root-owned helper + a NOPASSWD
+    # sudoers rule scoped to *only that helper*, which strictly validates its
+    # args and only ever touches ares-nic* interfaces. The unprivileged backend
+    # calls it to create a persistent, caller-owned device it then attaches to.
+    # Result: SDR-as-NIC works out of the box, backend stays unprivileged.
+    NIC_HELPER_SRC="$SCRIPT_DIR/scripts/ares-nic-helper"
+    NIC_HELPER_DST="/usr/local/sbin/ares-nic-helper"
+    if [ -f "$NIC_HELPER_SRC" ] && [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ]; then
+        maybe_sudo install -m 0755 -o root -g root "$NIC_HELPER_SRC" "$NIC_HELPER_DST" 2>/dev/null \
+            && ok "Installed $NIC_HELPER_DST"
+        # sudoers drop-in — validate before installing so a bad file can't lock sudo.
+        NIC_SUDOERS_TMP="$(mktemp)"
+        printf '%s %s\n' "$TARGET_USER" "ALL=(root) NOPASSWD: $NIC_HELPER_DST" > "$NIC_SUDOERS_TMP"
+        if visudo -cf "$NIC_SUDOERS_TMP" >/dev/null 2>&1; then
+            maybe_sudo install -m 0440 -o root -g root "$NIC_SUDOERS_TMP" /etc/sudoers.d/ares-nic 2>/dev/null \
+                && ok "Wrote /etc/sudoers.d/ares-nic (passwordless ares-nic-helper for $TARGET_USER) — SDR-as-NIC works without root."
+        else
+            warn "Skipped sudoers drop-in (visudo validation failed); SDR-as-NIC will need CAP_NET_ADMIN/root."
+        fi
+        rm -f "$NIC_SUDOERS_TMP"
+    fi
 fi
 
 # ── 4a^^. SignalHound SDR bridge (BB60C/D, SM200A/B/C, SA44/124, TG124A) ────

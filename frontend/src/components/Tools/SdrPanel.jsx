@@ -13,8 +13,8 @@
  * so the 2D + 3D maps render them through the existing `geolocationGeoJSON`
  * pipeline (no map code changes needed).
  */
-import { useEffect, useMemo, useState } from 'react'
-import { X, Plus, RefreshCw, Trash2, Wifi, WifiOff, AlertCircle, Activity, Radio, Save, Cpu, Network, Crosshair } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { X, Plus, RefreshCw, Trash2, Wifi, WifiOff, AlertCircle, Activity, Radio, Save, Cpu, Network, Crosshair, Terminal, Copy } from 'lucide-react'
 import CellularPanel from './CellularPanel'
 import {
   listSdrDevices, createSdrDevice, updateSdrDevice, deleteSdrDevice, testSdrDevice,
@@ -34,6 +34,20 @@ const DF_METHODS = [
   { id: 'watson_watt', label: 'Watson-Watt (Adcock)' },
   { id: 'doppler', label: 'Pseudo-Doppler (phase-mode)' },
 ]
+
+// One-line "what it is + when to pick it" for each DF method, shown under the
+// method picker (and expanded as a comparison list via the ? toggle).
+const DF_METHOD_HELP = {
+  music: 'Super-resolution eigenstructure method — sharpest bearings and the only one that cleanly splits two co-channel emitters. Needs a calibrated coherent array (≥3 ch) and decent SNR. The default for KrakenSDR / coherent-USRP DF.',
+  capon: 'MVDR adaptive beamformer — higher resolution than Bartlett, more forgiving than MUSIC when you don’t know how many signals are present. A solid general-purpose choice on a coherent array with mild calibration error.',
+  bartlett: 'Conventional beamformer — lowest resolution but the most tolerant of calibration/model error and low SNR. Pick it as a robust fallback, for one dominant emitter, or when MUSIC/Capon look jumpy.',
+  correlative: 'Correlative interferometry (CDF/CIDF) — matches measured phases against a stored array manifold, so it handles arbitrary/large arrays and wideband signals. Pick it for ALARIS-style heads and when you have a measured calibration table.',
+  watson_watt: 'Watson-Watt on a crossed Adcock pair (+ sense) — the compact low-channel classic for HF/VHF. Single-emitter only and lower accuracy, but works with just 2–3 channels and a small antenna.',
+  doppler: 'Pseudo-Doppler / phase-mode — emulates a spinning antenna from a switched ring. Cheap and fast to acquire but coarse and single-emitter; good for quick bearings on a UCA when precision isn’t critical.',
+}
+
+// Per-level colours for the event/error console.
+const LOG_COLOR = { ok: '#3fb950', info: '#8b949e', warn: '#f0883e', error: '#f85149' }
 
 // Drivers whose constructor takes a connection string, and the kwarg name for it.
 // (plutosdr/antsdr expect `uri`, UHD expects `args`; others have no addressable URI.)
@@ -59,14 +73,42 @@ const btn = { background: '#21262d', border: '1px solid #30363d', borderRadius: 
 
 export default function SdrPanel({ onClose, mapCenter, sdr }) {
   // Shared, always-on SDR feed (the WS subscription lives in App via useSdrStream).
-  const { devices, setDevices, lobs, gps, setGps, mesh, setMesh, wsState } = sdr
+  const { devices, setDevices, lobs, gps, setGps, mesh, setMesh, wsState, wsError } = sdr
   const [gpsInput, setGpsInput] = useState({ lat: '', lon: '' })
   const [gpsSrc, setGpsSrc] = useState(null)              // backend GPS-source status
   const [gpsSrcForm, setGpsSrcForm] = useState({ kind: 'manual', host: '127.0.0.1', port: 2947, path: '/dev/ttyUSB0', baud: 9600, device_args: '' })
   const [gpsWatchId, setGpsWatchId] = useState(null)      // navigator.geolocation.watchPosition id (browser source)
   const [iqBackend, setIqBackend] = useState(null)        // /df/iq_backend — native IQ capture status + SDR(s) seen by SoapySDR
   const [peerInput, setPeerInput] = useState('')
-  const [errText, setErrText] = useState(null)
+  const [errText, setErrTextRaw] = useState(null)        // transient banner (latest message)
+  // ── event/error console ──
+  // Every message that flows through setErrText, plus WS-stream lifecycle and
+  // per-device streaming errors, is appended here so the operator can scroll
+  // back through everything instead of seeing only the last line.
+  const [log, setLog] = useState([])                     // [{ id, t, level, msg }] (level: ok|info|warn|error)
+  const [logOpen, setLogOpen] = useState(true)
+  const [logErrorsOnly, setLogErrorsOnly] = useState(false)
+  const logRef = useRef(null)
+  const seenDevErr = useRef({})                          // device.id → last logged last_error (dedupe)
+  const pushLog = useCallback((msg, level = 'error') => {
+    if (!msg) return
+    setLog(prev => {
+      const last = prev[prev.length - 1]
+      if (last && last.msg === msg && last.level === level) return prev   // drop consecutive dupes
+      return [...prev.slice(-299), { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, t: Date.now(), level, msg: String(msg) }]
+    })
+  }, [])
+  // Wrap setErrText so every existing call site both shows the banner AND logs.
+  const setErrText = useCallback((msg) => {
+    setErrTextRaw(msg)
+    if (msg) pushLog(msg, msg.startsWith('✓') ? 'ok' : msg.startsWith('⚠') ? 'warn' : 'error')
+  }, [pushLog])
+  const copyLog = () => {
+    const text = log.map(e => `${new Date(e.t).toISOString()} ${e.level.toUpperCase().padEnd(5)} ${e.msg}`).join('\n')
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => setErrTextRaw(`✓ copied ${log.length} log lines`)).catch(() => setErrTextRaw('⚠ clipboard unavailable'))
+    else setErrTextRaw('⚠ clipboard unavailable')
+  }
+  const clearLog = () => { setLog([]); seenDevErr.current = {} }
   const [adding, setAdding] = useState(false)
   const [addChooser, setAddChooser] = useState(false)    // unified "Add device" → pick a role/mode
   const [form, setForm] = useState(() => blankForm(mapCenter))
@@ -76,6 +118,7 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
   const [liveAdding, setLiveAdding] = useState(false)
   const [liveForm, setLiveForm] = useState(() => blankLiveForm(mapCenter))
   const [liveAccEst, setLiveAccEst] = useState(null)
+  const [methodHelp, setMethodHelp] = useState(false)    // expand the DF-method comparison
   const [antennas, setAntennas] = useState([])           // /df/antennas catalog (ALARIS + others)
   const liveDriver = useMemo(() => drivers.find(d => d.id === liveForm.driver_id) || null, [drivers, liveForm.driver_id])
   // ── SDR-as-NIC (TAP/TUN over RF) ──
@@ -102,6 +145,24 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
       .then(r => { if (!stop) setLiveAccEst(r) }).catch(() => { if (!stop) setLiveAccEst(null) })
     return () => { stop = true }
   }, [liveAdding, liveForm.channels, liveForm.array_type, liveForm.array_spacing_wavelengths, liveForm.frequency_mhz])
+
+  // Log WS-stream lifecycle transitions (the header chip only shows the latest).
+  useEffect(() => {
+    if (wsState === 'open') pushLog('WebSocket stream connected', 'ok')
+    else if (wsState === 'error') pushLog(`WebSocket stream error — ${wsError?.detail || 'connection failed or dropped'} (auto-retrying)`, 'error')
+    // 'connecting' (initial) is left out to avoid noise on first mount
+  }, [wsState, wsError, pushLog])
+
+  // Log per-device streaming errors as they change (devices update often via the
+  // LoB stream, so only append when a device's last_error actually changes).
+  useEffect(() => {
+    for (const d of devices) {
+      const cur = d.last_error || ''
+      if (seenDevErr.current[d.id] === cur) continue
+      seenDevErr.current[d.id] = cur
+      if (cur) pushLog(`${d.name || d.id}: ${cur}`, d.status === 'error' ? 'error' : 'warn')
+    }
+  }, [devices, pushLog])
 
   // Panel-specific one-shot loads + the NIC link-stat poll. The live SDR feed
   // (devices/LoBs/fixes/GPS + map features) is the always-on App-level
@@ -329,9 +390,18 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 12, borderBottom: '1px solid #21262d' }}>
           <h3 style={{ margin: 0, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Radio size={16} /> SDR console
-            <span title="WebSocket stream" style={{ fontSize: 11, color: wsState === 'open' ? '#3fb950' : wsState === 'error' ? '#f85149' : '#d29922' }}>
+            <span title={wsState === 'error' && wsError?.detail ? `WebSocket stream: ${wsError.detail} — click for the event log` : 'WebSocket stream — click for the event log'}
+                  onClick={() => { setLogOpen(true); setTimeout(() => logRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60) }}
+                  style={{ fontSize: 11, cursor: 'pointer', color: wsState === 'open' ? '#3fb950' : wsState === 'error' ? '#f85149' : '#d29922' }}>
               {wsState === 'open' ? '● live' : wsState === 'error' ? '● error' : '● connecting'}
             </span>
+            {log.some(e => e.level === 'error') && (
+              <span title="errors logged — click for the event log"
+                    onClick={() => { setLogOpen(true); setTimeout(() => logRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60) }}
+                    style={{ fontSize: 10, cursor: 'pointer', color: '#f85149', border: '1px solid #f85149', borderRadius: 10, padding: '0 6px' }}>
+                {log.filter(e => e.level === 'error').length} ⚠
+              </span>
+            )}
           </h3>
           <button style={btn} onClick={onClose}><X size={14} /></button>
         </div>
@@ -570,12 +640,32 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
                 <span style={{ color: '#8b949e' }}>gain dB</span>
                 <input style={inputStyle} value={liveForm.gain_db} onChange={e => setLiveForm(f => ({ ...f, gain_db: e.target.value }))} placeholder="blank = AGC" />
 
-                <span style={{ color: '#8b949e' }}>method</span>
+                <span style={{ color: '#8b949e', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  method
+                  <button type="button" style={{ ...btn, padding: '0 5px', lineHeight: 1.4 }} title="Compare the DF algorithms"
+                          onClick={() => setMethodHelp(v => !v)}>?</button>
+                </span>
                 <select style={inputStyle} value={liveForm.method} onChange={e => setLiveForm(f => ({ ...f, method: e.target.value }))}>
                   {DF_METHODS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                 </select>
                 <span style={{ color: '#8b949e' }}>dwell s</span>
                 <input style={inputStyle} type="number" step={0.1} value={liveForm.dwell_s} onChange={e => setLiveForm(f => ({ ...f, dwell_s: e.target.value }))} />
+                {/* one-line hint for the selected method (updates as you change it) */}
+                <span style={{ gridColumn: '1 / -1', fontSize: 10, color: '#6e7681', marginTop: -2 }}>
+                  {DF_METHOD_HELP[liveForm.method]}
+                </span>
+                {methodHelp && (
+                  <div style={{ gridColumn: '1 / -1', background: '#0d1117', border: '1px solid #21262d', borderRadius: 6,
+                                padding: 8, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 10, color: '#8b949e' }}>
+                    <div style={{ color: '#6e7681' }}>Which one? Higher resolution needs more coherent channels, tighter calibration and SNR; the classic methods trade accuracy for working on cheaper/smaller arrays.</div>
+                    {DF_METHODS.map(m => (
+                      <div key={m.id} style={{ display: 'flex', gap: 6, alignItems: 'baseline', opacity: liveForm.method === m.id ? 1 : 0.8 }}>
+                        <strong style={{ color: liveForm.method === m.id ? '#58a6ff' : '#c9d1d9', minWidth: 132, flexShrink: 0 }}>{m.label}</strong>
+                        <span>{DF_METHOD_HELP[m.id]}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <span style={{ color: '#8b949e' }}>antenna heading °</span>
                 <input style={inputStyle} type="number" value={liveForm.antenna_heading_deg} onChange={e => setLiveForm(f => ({ ...f, antenna_heading_deg: e.target.value }))} />
@@ -866,9 +956,46 @@ export default function SdrPanel({ onClose, mapCenter, sdr }) {
               the empty signpost that used to live here was removed — see AtakServerPanel. */}
 
           {errText && (
-            <div style={{ fontSize: 11, color: errText.startsWith('✓') ? '#3fb950' : '#f85149',
+            <div style={{ fontSize: 11, color: errText.startsWith('✓') ? '#3fb950' : errText.startsWith('⚠') ? '#f0883e' : '#f85149',
                           background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, padding: 6 }}>{errText}</div>
           )}
+
+          {/* Event / error console — accumulates everything (API results, WS-stream
+              lifecycle, per-device streaming errors) so the operator can scroll back. */}
+          <div ref={logRef}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.8, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Terminal size={12} /> Event log
+              </span>
+              <span style={{ fontSize: 10, color: '#6e7681' }}>
+                {log.length} event{log.length === 1 ? '' : 's'}
+                {log.filter(e => e.level === 'error').length > 0 && <span style={{ color: '#f85149' }}> · {log.filter(e => e.level === 'error').length} error{log.filter(e => e.level === 'error').length === 1 ? '' : 's'}</span>}
+              </span>
+              <span style={{ flex: 1 }} />
+              <label style={{ fontSize: 10, color: '#8b949e', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <input type="checkbox" checked={logErrorsOnly} onChange={e => setLogErrorsOnly(e.target.checked)} /> errors only
+              </label>
+              <button style={{ ...btn, padding: '2px 6px' }} title="Copy log to clipboard" onClick={copyLog}><Copy size={12} /></button>
+              <button style={{ ...btn, padding: '2px 6px' }} title="Clear log" onClick={clearLog}><Trash2 size={12} color="#f85149" /></button>
+              <button style={{ ...btn, padding: '2px 6px' }} title={logOpen ? 'Collapse' : 'Expand'} onClick={() => setLogOpen(o => !o)}>{logOpen ? '▾' : '▸'}</button>
+            </div>
+            {logOpen && (
+              <div style={{ background: '#0b0f14', border: '1px solid #21262d', borderRadius: 6, padding: 6, maxHeight: 220, overflowY: 'auto',
+                            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11, lineHeight: 1.5 }}>
+                {(() => {
+                  const rows = logErrorsOnly ? log.filter(e => e.level === 'error' || e.level === 'warn') : log
+                  if (rows.length === 0) return <div style={{ color: '#484f58' }}>{logErrorsOnly ? 'No errors logged.' : 'No events yet.'}</div>
+                  return [...rows].reverse().map(e => (
+                    <div key={e.id} style={{ color: LOG_COLOR[e.level] || '#8b949e', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      <span style={{ color: '#484f58' }}>{new Date(e.t).toLocaleTimeString()}</span>{' '}
+                      <span style={{ opacity: 0.85 }}>{e.level.toUpperCase().padEnd(5)}</span>{' '}
+                      {e.msg}
+                    </div>
+                  ))
+                })()}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

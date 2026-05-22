@@ -30,6 +30,7 @@ export function useSdrStream({ onFeatures, onCoverage, onFixes } = {}) {
   const [gps, setGps] = useState(null)
   const [mesh, setMesh] = useState(null)
   const [wsState, setWsState] = useState('connecting')
+  const [wsError, setWsError] = useState(null)        // last disconnect cause: { detail, code, t }
 
   // Lift live Cuts/Fixes (with a centroid) up whenever they change.
   useEffect(() => {
@@ -57,6 +58,7 @@ export function useSdrStream({ onFeatures, onCoverage, onFixes } = {}) {
       (m) => {
         if (cancelled) return
         setWsState('open')
+        setWsError(null)            // a message means the stream is healthy again
         if (m.type === 'snapshot') {
           setDevices(m.devices || [])
           setLobs(m.lobs || [])
@@ -80,7 +82,12 @@ export function useSdrStream({ onFeatures, onCoverage, onFixes } = {}) {
           onCoverage?.({ geojson: m.geojson, frequency_hz: m.frequency_hz, centroid: m.centroid })
         }
       },
-      () => setWsState('error'),
+      (info) => {
+        if (cancelled) return
+        setWsState('error')
+        const detail = (info && typeof info === 'object') ? info.detail : (info ? String(info) : 'connection failed')
+        setWsError({ detail, code: info?.code ?? null, t: Date.now() })
+      },
     )
     const meshTimer = setInterval(() => {
       getSdrPeers().then(r => { if (!cancelled) setMesh({ node_id: r.node_id, node_label: r.node_label, peers: r.status || [] }) }).catch(() => {})
@@ -89,5 +96,5 @@ export function useSdrStream({ onFeatures, onCoverage, onFixes } = {}) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { devices, setDevices, lobs, fixes, gps, setGps, mesh, setMesh, wsState }
+  return { devices, setDevices, lobs, fixes, gps, setGps, mesh, setMesh, wsState, wsError }
 }

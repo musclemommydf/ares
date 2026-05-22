@@ -135,6 +135,12 @@ export default function App() {
     tick(); const h = setInterval(tick, 4000)
     return () => { stop = true; clearInterval(h) }
   }, [])
+  // SDRs whose position is the live GPS fix (use_gps + enabled) — surfaced on the
+  // "you are here" marker's hover so the operator sees what's pinned to that fix.
+  const gpsTrackers = useMemo(() => (sdrStream.devices || [])
+    .filter(d => d.use_gps && d.enabled)
+    .map(d => ({ id: d.id, name: d.name, type: d.type, position_source: d.position_source, status: d.status })),
+  [sdrStream.devices])
   const [packBboxFromMap, setPackBboxFromMap] = useState(null)   // [w,s,e,n] picked by drawing a box for a pack download
   const awaitingPackBboxRef = useRef(false)
 
@@ -1849,6 +1855,7 @@ export default function App() {
               extraTxList={extraTxList}
               geolocationGeoJSON={geolocationGeoJSON}
               gpsFix={gpsFix}
+              gpsTrackers={gpsTrackers}
             />
           </Suspense>
         ) : (
@@ -1860,6 +1867,7 @@ export default function App() {
           buildingGeoJSON={buildingGeoJSON}
           extraTxList={extraTxList}
           gpsFix={gpsFix}
+          gpsTrackers={gpsTrackers}
           p2pProfile={terrainProfile}
           activeTab={activeTab}
           minSignalDbm={propagation.min_signal_dbm}
