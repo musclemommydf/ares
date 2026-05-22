@@ -216,7 +216,7 @@ class SDRManager:
             # IQ-to-bearing path: instantiate a registry driver + run Ares's own
             # MUSIC/Capon/Bartlett solver in-process (no external DF daemon).
             from .live_df import LiveDfAdapter
-            return LiveDfAdapter(dev, self._on_lob)
+            return LiveDfAdapter(dev, self._on_lob, has_viewers=self.has_viewers)
         if dev.type == "krakensdr":
             return KrakenSdrAdapter(dev, self._on_lob)
         if dev.type == "matchstiq_x40":
@@ -559,6 +559,12 @@ class SDRManager:
 
     def unsubscribe(self, q: asyncio.Queue) -> None:
         self._subscribers.discard(q)
+
+    def has_viewers(self) -> bool:
+        """True if any client (web UI / ATAK / mesh peer) is subscribed to the live
+        SDR stream. The live-DF capture/DSP loop uses this to idle when nobody is
+        listening — no subscribers ⇒ no UI polling /spectrum either."""
+        return len(self._subscribers) > 0
 
     def _broadcast(self, event: dict) -> None:
         dead = []

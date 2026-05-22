@@ -58,13 +58,16 @@ from .manager import LobEvent, SDRDevice
 log = logging.getLogger(__name__)
 
 _C = 299_792_458.0
+_IDLE_DWELL = 2.0    # seconds between heartbeats while idling (no subscribers)
 
 
 class LiveDfAdapter(_Base):
     """Drive a registry SDR driver → in-process DF → LoB stream."""
 
-    def __init__(self, dev: SDRDevice, on_lob: Callable[[LobEvent], Awaitable[None]]):
+    def __init__(self, dev: SDRDevice, on_lob: Callable[[LobEvent], Awaitable[None]], has_viewers=None):
         super().__init__(dev, on_lob)
+        self._has_viewers = has_viewers or (lambda: True)   # gate the capture/DSP loop on live subscribers
+        self._idle = False
         md = dev.metadata or {}
         self.driver_id: str = str(md.get("driver_id") or "synthetic")
         self.driver_args: dict = dict(md.get("driver_args") or {})
@@ -512,6 +515,20 @@ class LiveDfAdapter(_Base):
             backoff = 1.0
             try:
                 while True:
+                    # Idle when nobody is subscribed (and not actively listening):
+                    # skip the capture + MUSIC/Bartlett DSP, just heartbeat. The driver
+                    # stays open so a reconnecting client resumes within _IDLE_DWELL.
+                    if not self._has_viewers() and self._audio is None:
+                        if not self._idle:
+                            self._idle = True
+                            self.report("idle")
+                            log.info("live-DF %s: no subscribers — idling capture/DSP", self.dev.id)
+                        await asyncio.sleep(_IDLE_DWELL)
+                        continue
+                    if self._idle:
+                        self._idle = False
+                        self.report("streaming")
+                        log.info("live-DF %s: client connected — resuming capture", self.dev.id)
                     # operator-forced recalibration (POST /df/live/{id}/calibrate)
                     force = float((self.dev.metadata or {}).get("force_cal") or 0.0)
                     if force and force != self._force_cal_seen:
