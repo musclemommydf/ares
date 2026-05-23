@@ -427,7 +427,11 @@ async def _http_json(url: str, headers: Optional[dict] = None) -> Any:
     async with aiohttp.ClientSession(timeout=_TIMEOUT) as s:
         async with s.get(url, headers=h) as r:
             r.raise_for_status()
-            return await r.json(content_type=None)
+            raw = await r.read()                  # bytes — some feeds (GDELT GKG) emit latin-1
+            try:
+                return json.loads(raw)
+            except UnicodeDecodeError:
+                return json.loads(raw.decode("utf-8", "replace"))
 
 
 async def _http_post_form(url: str, data: dict) -> Any:
@@ -449,10 +453,13 @@ async def _fetch_deepstate(fd, params, bbox, cfg) -> dict:
 
 
 async def _fetch_gdelt(fd, params, bbox, cfg) -> dict:
-    query = (params.get("query") or "conflict").strip() or "conflict"
-    timespan = params.get("timespan") or "1d"
-    url = (f"https://api.gdeltproject.org/api/v2/geo/geo?query={quote(query)}"
-           f"&format=geojson&timespan={quote(str(timespan))}")
+    # The v2 GEO API (/api/v2/geo/geo) is returning 404 server-side, so use the v1
+    # GKG GeoJSON API — the last 15-min window of geolocated GKG events as GeoJSON,
+    # with an optional keyword filter.
+    query = (params.get("query") or "").strip()
+    url = "https://api.gdeltproject.org/api/v1/gkg_geojson"
+    if query:
+        url += f"?QUERY={quote(query)}"
     return _geojson_passthrough(await _http_json(url))
 
 
@@ -526,8 +533,10 @@ async def _acled_token(email: str, password: str) -> str:
     tok = _ACLED_TOKENS.get(email)
     if tok and tok["exp"] - time.time() > 60:
         return tok["access_token"]
+    # ACLED's docs show the credential field as `email`; OAuth2 password grant uses
+    # `username` — send both so either server expectation works.
     data = await _http_post_form("https://acleddata.com/oauth/token", {
-        "username": email, "password": password, "grant_type": "password",
+        "username": email, "email": email, "password": password, "grant_type": "password",
         "client_id": "acled", "scope": "authenticated",
     })
     access = data.get("access_token")
@@ -625,7 +634,17 @@ _JSON_LATLNG_RE = re.compile(r'"lat(?:itude)?"\s*:\s*(-?\d+\.\d+)\s*,\s*"l(?:ng|
 
 async def _fetch_liveuamap(fd, params, bbox, cfg) -> dict:
     region = re.sub(r"[^a-z0-9-]", "", (params.get("region") or "ukraine").lower()) or "ukraine"
-    text = await _http_text(f"https://{region}.liveuamap.com/")
+    _cf = ("LiveUAMap is behind a Cloudflare bot challenge that blocks server-side scraping. "
+           "Use the generic feed importer with a direct data URL, or a browser-based exporter.")
+    try:
+        text = await _http_text(f"https://{region}.liveuamap.com/")
+    except aiohttp.ClientResponseError as e:
+        if e.status in (403, 503):                # Cloudflare returns 403/503 for blocked bots
+            raise RuntimeError(_cf) from e
+        raise
+    # Some CF blocks return 200 with a challenge interstitial — detect that too.
+    if "just a moment" in text.lower() or "cf-browser-verification" in text.lower() or "challenge-platform" in text.lower():
+        raise RuntimeError(_cf)
     pairs = _LAT_LNG_RE.findall(text) or _JSON_LATLNG_RE.findall(text)
     feats = []
     seen = set()
