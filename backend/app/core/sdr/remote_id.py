@@ -28,6 +28,7 @@ a synthetic beacon drives the map + CoT path offline; ``parse_f3411`` /
 from __future__ import annotations
 
 import math
+import os
 import shutil
 import struct
 import time
@@ -226,6 +227,36 @@ def set_droneid_v2_descrambler(fn):
     global _DRONEID_V2_DESCRAMBLER
     _DRONEID_V2_DESCRAMBLER = fn
 
+
+def aes_ctr_descramble(payload: bytes, key: bytes, nonce: bytes, offset: int = 0) -> bytes:
+    """AES-CTR de-obfuscate ``payload[offset:]`` with ``key`` (16/24/32 B) + 16-B
+    ``nonce``. The mechanism DJI DroneID v2 uses (a fixed published key + a
+    packet-derived nonce — a known descramble, not a comms decrypt)."""
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    head, body = bytes(payload[:offset]), bytes(payload[offset:])
+    dec = Cipher(algorithms.AES(bytes(key)), modes.CTR(bytes(nonce))).decryptor()
+    return head + dec.update(body) + dec.finalize()
+
+
+def _default_v2_descrambler(payload: bytes) -> bytes:
+    """Default DJI DroneID v2 descrambler, enabled only when a key is configured via
+    env (the published key/region from security research isn't shipped):
+      ARES_DRONEID_V2_KEY    hex AES key (16/24/32 bytes)
+      ARES_DRONEID_V2_IV     hex 16-byte nonce (default: zero)
+      ARES_DRONEID_V2_OFFSET plaintext-header length kept in clear (default 0)
+    Returns the payload unchanged if no key is set."""
+    key = os.environ.get("ARES_DRONEID_V2_KEY")
+    if not key:
+        return payload
+    nonce = bytes.fromhex(os.environ.get("ARES_DRONEID_V2_IV", "00" * 16))
+    offset = int(os.environ.get("ARES_DRONEID_V2_OFFSET", "0"))
+    return aes_ctr_descramble(payload, bytes.fromhex(key), nonce, offset)
+
+
+# Auto-register the AES-CTR descrambler when a key is configured (safe no-op otherwise).
+if os.environ.get("ARES_DRONEID_V2_KEY"):
+    _DRONEID_V2_DESCRAMBLER = _default_v2_descrambler
+
 DJI_OUI = bytes.fromhex("60601f")  # the DJI vendor OUI seen in the WiFi vendor IE / beacon
 
 
@@ -277,10 +308,10 @@ def parse_dji_droneid(data: bytes) -> dict:
     except Exception as e:  # pragma: no cover
         out["parse_error"] = str(e)
     if ver >= 2 and not out.get("v2_descrambled"):
-        out["note"] = ("DroneID v2: the payload tail is obfuscated (AES-CTR, fixed published key + packet-derived nonce) "
-                       "— Ares parsed the plaintext header. Register a descrambler with set_droneid_v2_descrambler(fn) "
-                       "(wrap the open `dji_droneid` AES-CTR + key) for the full v2 fields. A fixed published descramble, "
-                       "not a comms decrypt.")
+        out["note"] = ("DroneID v2: obfuscated tail (AES-CTR). The descrambler is implemented "
+                       "(aes_ctr_descramble / auto-registered when keyed) — set ARES_DRONEID_V2_KEY "
+                       "(+ _IV / _OFFSET) with the published research key to decode the full v2 fields; "
+                       "Ares parsed the plaintext header only. A fixed published descramble, not a comms decrypt.")
     return out
 
 

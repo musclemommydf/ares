@@ -30,3 +30,5 @@ bleak>=0.21              # BLE OpenDroneID / Remote-ID capture (rid_sniffer). No
                          # the sniffer catches the ImportError and falls back to the synthetic beacon.
 scapy>=2.5               # WiFi (monitor-mode) OpenDroneID / DJI DroneID capture (rid_sniffer). Needs a
                          # monitor-capable NIC + CAP_NET_RAW; degrades to BLE-only / synthetic otherwise.
+cryptography>=41         # AES-CTR DJI DroneID v2 descramble (remote_id.aes_ctr_descramble). The key
+                         # itself (published security research) is supplied via ARES_DRONEID_V2_KEY.
