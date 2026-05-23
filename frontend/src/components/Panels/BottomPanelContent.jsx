@@ -33,7 +33,7 @@ export default function BottomPanelContent({
   ul,                                                  // video → "add to map"
   terrainGrid, terrainGridLoading, coverageGeoJSON, buildingGeoJSON,   // 3-D view
   txActive, txLabel, extraTxList, lobs, lobGroups, onRemoveLoB, onEditLoB, onEditEmitter, onSimulatePropagationFromFix,   // emitter summary
-  onDeleteEmitter, onDeleteGeoEmitter, onToggleGeoAutoCoverage, isGeoAutoCovered,                        // emitter summary — delete + per-emitter auto-coverage
+  onDeleteEmitter, onDeleteGeoEmitter, onDismissLiveFix, onToggleGeoAutoCoverage, isGeoAutoCovered,       // emitter summary — delete + per-emitter auto-coverage
   onInterference, onSuperLayer, isSimulating,                                                            // emitter summary — layer-combination analyses (moved here from the header menu)
   autoCoverage, onToggleAutoCoverage, sdrFixes,                                                          // emitter summary — auto-simulate propagation on new fixes + live SDR fixes
   onSendAlgorithmFixToMap,                                                                              // algorithms tab
@@ -85,7 +85,7 @@ export default function BottomPanelContent({
       {active === 'passive_radar' && <div style={HIDDEN}><PassiveRadarPanel /></div>}
       {active === 'activity' && <div style={HIDDEN}><EmitterAnalyticsPanel /></div>}
       {active === 'emitters' && (
-        <EmitterSummary txActive={txActive} txLabel={txLabel} tx={tx} extraTxList={extraTxList} lobs={lobs} lobGroups={lobGroups} onRemoveLoB={onRemoveLoB} onEditLoB={onEditLoB} onEditEmitter={onEditEmitter} onDeleteEmitter={onDeleteEmitter} onDeleteGeoEmitter={onDeleteGeoEmitter} onSimulatePropagationFromFix={onSimulatePropagationFromFix} onToggleGeoAutoCoverage={onToggleGeoAutoCoverage} isGeoAutoCovered={isGeoAutoCovered} onInterference={onInterference} onSuperLayer={onSuperLayer} isSimulating={isSimulating} autoCoverage={autoCoverage} onToggleAutoCoverage={onToggleAutoCoverage} sdrFixes={sdrFixes} />
+        <EmitterSummary txActive={txActive} txLabel={txLabel} tx={tx} extraTxList={extraTxList} lobs={lobs} lobGroups={lobGroups} onRemoveLoB={onRemoveLoB} onEditLoB={onEditLoB} onEditEmitter={onEditEmitter} onDeleteEmitter={onDeleteEmitter} onDeleteGeoEmitter={onDeleteGeoEmitter} onDismissLiveFix={onDismissLiveFix} onSimulatePropagationFromFix={onSimulatePropagationFromFix} onToggleGeoAutoCoverage={onToggleGeoAutoCoverage} isGeoAutoCovered={isGeoAutoCovered} onInterference={onInterference} onSuperLayer={onSuperLayer} isSimulating={isSimulating} autoCoverage={autoCoverage} onToggleAutoCoverage={onToggleAutoCoverage} sdrFixes={sdrFixes} />
       )}
       {active === 'video' && (
         <div style={HIDDEN}>

@@ -20,7 +20,7 @@ function rmsM(inters, centroid) {
  * sidebar (if collapsed) and expands + scrolls to the matching TransmitterPanel,
  * so the full parameter form is the single source of truth for editing.
  */
-export default function EmitterSummary({ txActive, txLabel, tx, extraTxList, lobs, lobGroups, onRemoveLoB, onEditLoB, onEditEmitter, onDeleteEmitter, onDeleteGeoEmitter, onSimulatePropagationFromFix, onToggleGeoAutoCoverage, isGeoAutoCovered, onInterference, onSuperLayer, isSimulating = false, autoCoverage, onToggleAutoCoverage, sdrFixes = [] }) {
+export default function EmitterSummary({ txActive, txLabel, tx, extraTxList, lobs, lobGroups, onRemoveLoB, onEditLoB, onEditEmitter, onDeleteEmitter, onDeleteGeoEmitter, onDismissLiveFix, onSimulatePropagationFromFix, onToggleGeoAutoCoverage, isGeoAutoCovered, onInterference, onSuperLayer, isSimulating = false, autoCoverage, onToggleAutoCoverage, sdrFixes = [] }) {
   const propEmitters = [
     txActive ? {
       id: 'primary', label: txLabel,
@@ -144,9 +144,17 @@ export default function EmitterSummary({ txActive, txLabel, tx, extraTxList, lob
           const cep = fx.cep?.cep_m ?? fx.cep?.radius_m ?? (typeof fx.cep === 'number' ? fx.cep : null)
           return (
             <div key={`sdr-${i}`} style={{ background: '#0d1117', border: `1px solid ${color}30`, borderLeft: `3px solid ${color}`, borderRadius: 4, padding: '7px 10px', marginBottom: 6 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color }}>{isFix ? 'FIX' : 'CUT'} · {(fx.frequency_hz / 1e6).toFixed(3)} MHz</span>
-                <span style={{ fontSize: 9, color: '#7dd3fc', border: '1px solid #1e3a5f', borderRadius: 3, padding: '0 4px' }}>LIVE SDR</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  <span style={{ fontSize: 9, color: '#7dd3fc', border: '1px solid #1e3a5f', borderRadius: 3, padding: '0 4px' }}>LIVE SDR</span>
+                  {onDismissLiveFix && (
+                    <button type="button" onClick={() => onDismissLiveFix({ frequency_hz: fx.frequency_hz, device_id: '' })}
+                      title="Delete this live fix from the table (dismiss until cleared)"
+                      style={{ padding: '2px 6px', fontSize: 11, lineHeight: 1, background: 'transparent',
+                        color: '#fca5a5', border: '1px solid #3f1d1d', borderRadius: 3, cursor: 'pointer' }}>×</button>
+                  )}
+                </div>
               </div>
               <div style={{ fontSize: 10, color: '#8b949e', marginTop: 2 }}>Location: {fx.centroid.lat.toFixed(5)}, {fx.centroid.lon.toFixed(5)}</div>
               {cep != null && <div style={{ fontSize: 10, color: '#484f58' }}>CEP: {fmtM(cep)}{fx.n_lobs ? ` · ${fx.n_lobs} LoBs` : ''}</div>}

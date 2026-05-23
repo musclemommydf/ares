@@ -118,6 +118,7 @@ export default function App() {
   const [sdrFeatures, setSdrFeatures] = useState([])
   const [sdrCoverage, setSdrCoverage] = useState(null)   // { geojson, frequency_hz, centroid }
   const [sdrFixes, setSdrFixes] = useState([])           // live SDR Cuts/Fixes → Emitter Summary + auto-coverage
+  const [dismissedSdrKeys, setDismissedSdrKeys] = useState(() => new Set())   // live fixes the user deleted from the table
   // Always-on SDR/DF feed: one WS subscription at the app level (not inside the
   // SDR console), so devices/LoBs/fixes/GPS + map features + auto-coverage flow
   // whether or not the console is open. SdrPanel consumes this via props.
@@ -820,36 +821,38 @@ export default function App() {
 
   const handleSimulatePropagationFromFix = useCallback((groupSummary, lat, lon, opts = {}) => {
     if (!groupSummary || lat == null || lon == null) return
-    const key = fixKey(groupSummary)
-    let created = false
-    setExtraTxList((prev) => {
-      // Already tracking this group → reuse, just nudge its lat/lon (lobGroups
-      // effect below would handle this on the next tick anyway).
-      const existing = prev.find((x) => x.trackingFixKey === key)
-      if (existing) {
-        return prev.map((x) => x.id === existing.id
-          ? { ...x, tx: { ...x.tx, lat, lon } }
-          : x)
-      }
-      created = true
-      const idx = prev.length
-      const color = TX_COLORS[idx % TX_COLORS.length]
-      const id = Date.now() + idx
-      return [...prev, {
-        id, color,
-        label: `${groupSummary.kind?.toUpperCase() || 'FIX'} · ${(groupSummary.frequency_hz / 1e6).toFixed(3)} MHz`,
-        trackingFixKey: key,
-        origin: 'df_head',                       // distinguishes from algorithm-tab fixes on the map
-        tx: { ...tx, lat, lon, frequency_hz: groupSummary.frequency_hz || tx.frequency_hz },
-        propagation: { ...propagation },
-        atmosphere: { ...atmosphere },
-      }]
-    })
-    // `silent` (auto-coverage path) doesn't yank the operator into propagation
-    // mode or toast on every fix update — it just keeps the tracking emitter live.
-    if (opts.silent) return
+    const kind = (groupSummary.kind || 'fix').toUpperCase()
+    const mhz = (groupSummary.frequency_hz / 1e6).toFixed(3)
+    if (opts.silent) {
+      // Auto-coverage path: per-fix "tracking" extra TX whose location follows the
+      // centroid. Kept separate from the primary so several fixes can track at once.
+      const key = fixKey(groupSummary)
+      setExtraTxList((prev) => {
+        const existing = prev.find((x) => x.trackingFixKey === key)
+        if (existing) {
+          return prev.map((x) => x.id === existing.id ? { ...x, tx: { ...x.tx, lat, lon } } : x)
+        }
+        const idx = prev.length
+        return [...prev, {
+          id: Date.now() + idx, color: TX_COLORS[idx % TX_COLORS.length],
+          label: `${kind} · ${mhz} MHz`, trackingFixKey: key, origin: 'df_head',
+          tx: { ...tx, lat, lon, frequency_hz: groupSummary.frequency_hz || tx.frequency_hz },
+          propagation: { ...propagation }, atmosphere: { ...atmosphere },
+        }]
+      })
+      return
+    }
+    // Explicit "Simulate" from the table: drop a ready-to-run PRIMARY emitter on the
+    // map at the fix location + frequency (keeping the current antenna/propagation
+    // settings) so the operator just tweaks parameters and hits Run.
+    setTx((prev) => ({ ...prev, lat, lon, frequency_hz: groupSummary.frequency_hz || prev.frequency_hz }))
+    setTxActive(true)
+    setTxLabel(`${kind} · ${mhz} MHz`)
     setMainMode('propagation')
-    toast.success(`Tracking propagation from ${groupSummary.kind?.toUpperCase() || 'FIX'} @ ${(groupSummary.frequency_hz / 1e6).toFixed(3)} MHz`)
+    setEditingEmitterId('primary')
+    setSidebarOpen(true)
+    setFlyToTarget({ lat, lon, zoom: 12, _t: Date.now() })
+    toast.success(`Emitter placed at the ${kind} @ ${mhz} MHz — adjust parameters and Run`)
   }, [tx, propagation, atmosphere, fixKey])
 
   // Auto-coverage: when enabled (toggle lives in the Emitter Summary table),
@@ -996,6 +999,12 @@ export default function App() {
       if (l?.id != null) handleRemoveLoB(l.id)
     }
   }, [handleRemoveLoB])
+
+  // Delete a live SDR fix from the table (it streams from hardware, so we dismiss it
+  // by key — it stays hidden unless the operator clears dismissals).
+  const handleDismissLiveFix = useCallback((summary) => {
+    setDismissedSdrKeys((prev) => new Set(prev).add(fixKey(summary)))
+  }, [fixKey])
 
   const updateExtraPropagation = useCallback((id, updater) => {
     setExtraTxList(prev => prev.map(x => {
@@ -1557,6 +1566,8 @@ export default function App() {
   // Results-panel state captured alongside the geometry so a reload repopulates
   // the bottom Results panel (link budget / metadata / warnings), not just the map.
   const currentResultExtras = { metadata, warnings, p2pResult }
+  const visibleSdrFixes = sdrFixes.filter(
+    (f) => !dismissedSdrKeys.has(fixKey({ frequency_hz: f.frequency_hz, device_id: '' })))
 
   // ── Emitter editor (left panel) — show one emitter's params at a time ──────
   const emitterChips = [
@@ -2083,8 +2094,9 @@ export default function App() {
           onEditEmitter={handleEditEmitter} onDeleteEmitter={handleDeleteEmitter} onDeleteGeoEmitter={handleDeleteGeoEmitter}
           onSimulatePropagationFromFix={handleSimulatePropagationFromFix}
           onToggleGeoAutoCoverage={handleToggleGeoAutoCoverage} isGeoAutoCovered={isGeoAutoCovered}
+          onDismissLiveFix={handleDismissLiveFix}
           onInterference={runInterference} onSuperLayer={runSuperLayer} isSimulating={isSimulating}
-          autoCoverage={autoCoverage} onToggleAutoCoverage={setAutoCoverage} sdrFixes={sdrFixes}
+          autoCoverage={autoCoverage} onToggleAutoCoverage={setAutoCoverage} sdrFixes={visibleSdrFixes}
           onSendAlgorithmFixToMap={handleSendAlgorithmFixToMap}
           savedLocations={savedLocations} onSavedFlyTo={(lat, lon) => setFlyToTarget({ lat, lon, zoom: 12, _t: Date.now() })} onSavedRemove={handleRemoveSavedLocation}
           tx={tx} rx={rx} propagation={propagation} spaceWeather={spaceWeather}
