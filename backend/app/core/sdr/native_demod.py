@@ -1101,9 +1101,10 @@ def demod_single_carrier(iq, fs: float, *, symbol_rate_hz: Optional[float] = Non
         "byte_stream": byte_stream,
         "_syms": syms,                              # equalised symbols for the DVB-S2 PL path
         "fec_stage": ("DVB-S/C: conv+Viterbi+deinterleave + RS(204,188) (hard-decision). "
-                      "DVB-S2: PLFRAME sync (SOF/PLS) + PL descramble + BCH+LDPC applied for "
-                      "short-frame QPSK (dvb_s2_pl.decode_dvbs2_plframe); 8PSK/APSK soft-demap "
-                      "+ normal-frame LDPC tables are the remaining mod paths"),
+                      "DVB-S2: PLFRAME sync (SOF/PLS) + PL descramble + soft-demap "
+                      "(QPSK/8PSK/16APSK/32APSK) + bit de-interleave + BCH+LDPC, normal "
+                      "(64800) and short (16200) FECFRAMEs, all code rates "
+                      "(dvb_s2_pl.decode_dvbs2_plframe)"),
     }
 
 
@@ -1196,8 +1197,9 @@ def _try_dvbt_soft(X, fft_len: int, *, max_symbols: int = 96) -> Optional[dict]:
 
 
 def _try_dvbs2(syms) -> Optional[dict]:
-    """DVB-S2: locate a PLFRAME (SOF), read the PLS config, descramble + FEC-decode it
-    (dvb_s2_pl, short-frame QPSK), and demux the recovered BBFRAME as TS. None on no lock."""
+    """DVB-S2: locate a PLFRAME (SOF), read the PLS config, descramble + soft-demap
+    (QPSK/8PSK/16APSK/32APSK) + BCH+LDPC-decode it (dvb_s2_pl, normal & short FECFRAMEs,
+    all code rates), and demux the recovered BBFRAME as TS. None on no lock."""
     if syms is None or len(syms) < 90 + 1000:
         return None
     from . import dvb_s2_pl, video_exploit as ve
