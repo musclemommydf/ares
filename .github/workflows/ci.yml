@@ -6,6 +6,17 @@ on:
   pull_request:
 
 jobs:
+  license-headers:
+    name: license headers — SPDX present on all source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check SPDX dual-license headers
+        run: python3 scripts/check_license_headers.py
+
   backend:
     name: backend — compile + validation harness
     runs-on: ubuntu-latest
