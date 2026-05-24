@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Ares — KMZ export of coverage layers (Workstream C, §C.1).
 

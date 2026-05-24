@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * PassiveRadarPanel — bundled passive-bistatic-radar mode (krakensdr_pr-style).
  *

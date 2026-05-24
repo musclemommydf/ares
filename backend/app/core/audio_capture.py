@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Tagged audio capture — WAV + sidecar JSON for every ▶ Listen session.
 

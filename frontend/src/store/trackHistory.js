@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Track history — recorded position-over-time tracks (Co-Opt mover replay,
  * drone telemetry, SDR-fed GPS feeds, etc.). Designed as a thin store that

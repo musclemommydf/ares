@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { computeGroupIntersections, computeCentroid } from '../Geolocation/LoBUtils'
 import LoBList from '../Geolocation/LoBList'
 

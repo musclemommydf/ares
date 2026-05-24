@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Passive bistatic radar (PBR) — cross-ambiguity function over a reference and
 surveillance IQ stream. Returns a range-Doppler map.

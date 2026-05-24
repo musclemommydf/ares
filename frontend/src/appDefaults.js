@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Module-level defaults for App.jsx's core state (transmitter, receiver,
  * propagation, atmosphere) plus a couple of small lookup tables.

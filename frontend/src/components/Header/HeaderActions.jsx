@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { Trash2, Server, Radio, Layers, Calculator, Zap } from 'lucide-react'
 
 const BTN = { gap: 4, fontSize: 11, flexShrink: 0 }

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Generate two PDFs in docs/:
   * Ares_Flyer.pdf     — a 4-page overview / capability flyer (portrait Letter)

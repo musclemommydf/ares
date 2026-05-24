@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Base class for cellular decoder sessions. Each concrete decoder
 (GSM / LTE / NR / UMTS / WiFi / BLE) inherits from this and implements

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Terrain Profile Chart
  * Shows elevation cross-section with LOS line, Fresnel zones, and signal strength.

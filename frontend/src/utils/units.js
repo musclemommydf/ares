@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Unit conversion and coordinate format utilities.
  * Supports: metric/imperial distances, lat-lon / MGRS / UTM coordinates.

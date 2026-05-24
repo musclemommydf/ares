@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Shared map display preferences (basemap, feature colours, coverage render mode).
  * Both the 2D Leaflet map and the 3D Cesium globe read from here so their toolbars

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Modal that lets the user pick which slices of app state to include in a
  * Save State export. Default is "everything checked"; the dialog returns a

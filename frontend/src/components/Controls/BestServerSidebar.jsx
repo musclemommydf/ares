@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Sidebar input for the Best-Server tab: the query point (which the tool tests against your TX
  * sites — the extra-TX list). The *result* — the ranked servers — is rendered in the bottom

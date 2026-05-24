@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 RF Propagation Models
 Implements: FSPL, Hata-Okumura, COST-231, Two-Ray, ITU-R P.1546,

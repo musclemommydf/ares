@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { Plus, X } from 'lucide-react'
 import EditableLabel from '../Common/EditableLabel'
 import TransmitterPanel from './TransmitterPanel'

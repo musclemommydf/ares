@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Node-native unit tests for the frontend's pure helper modules — runnable with
  * zero extra dependencies:  `node --test frontend/tests/`  (Node ≥ 18).

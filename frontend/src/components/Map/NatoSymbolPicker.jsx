@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Picker UI for placing NATO MIL-STD-2525 / APP-6 symbols on the map.
  * Lists curated categories (Units, Equipment, Tactical, Combat Service, CBRN,

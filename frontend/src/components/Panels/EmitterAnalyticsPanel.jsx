@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * EmitterAnalyticsPanel — wraps ActivityHeatmap + EmitterDetailCard with a
  * shared track selector. Mounted as the "Activity" tab of the bottom panel.

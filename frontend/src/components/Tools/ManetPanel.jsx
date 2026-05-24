@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * MANET Planning Panel
  * Place nodes on map, compute P2P between all pairs, show colored links.

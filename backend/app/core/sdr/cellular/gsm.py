@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 GSM passive control-channel decoder built around gr-gsm (GNU Radio out-of-tree
 module). We construct the flowgraph in Python rather than shelling out to

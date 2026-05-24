@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Auto session persistence — loads (and migrates) the saved UI session from
  * localStorage. App.jsx reads this once at module load to hydrate useState

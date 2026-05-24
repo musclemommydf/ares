@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 itm_its.py — faithful Python port of the ITS Irregular Terrain Model (Longley-Rice).
 

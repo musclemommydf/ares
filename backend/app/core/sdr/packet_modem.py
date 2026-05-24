@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 packet_modem.py — an in-process, software-defined packet modem (numpy only).
 

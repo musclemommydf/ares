@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 sdr/remote_id.py — UAS telemetry-beacon demux: ASTM F3411 (FAA Remote ID /
 ASD-STAN prEN 4709-002 "Open Drone ID") and DJI DroneID.

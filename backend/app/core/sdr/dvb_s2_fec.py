@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 dvb_s2_fec.py — DVB-S2 inner LDPC + outer BCH FEC (EN 302 307-1 §5.3).
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """SDR / direction-finding integration (Workstream D).
 
 Connect physical DF radios (KrakenSDR, Epiq Matchstiq X40, or any external DF

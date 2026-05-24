@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 export function dbmToQuality(dbm: number) {
   if (dbm >= -60) return { label: 'Excellent', color: '#06d6a0', bars: 5 }
   if (dbm >= -75) return { label: 'Good', color: '#84cc16', bars: 4 }

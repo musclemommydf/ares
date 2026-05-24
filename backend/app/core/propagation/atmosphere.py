@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Atmospheric Propagation Effects
 Covers: tropospheric refractivity, ducting, rain, fog, oxygen/water-vapour

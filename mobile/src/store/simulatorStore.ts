@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Global state store using React hooks (simple useState-based store pattern).
  * For larger apps this would use Zustand or Redux Toolkit.

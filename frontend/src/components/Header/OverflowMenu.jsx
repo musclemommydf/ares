@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { Undo2, Redo2, Save, FolderOpen, Upload, Trash2, HelpCircle } from 'lucide-react'
 
 const HDR = { fontSize: 10, color: '#484f58', padding: '3px 14px', letterSpacing: 0.7, fontWeight: 600 }

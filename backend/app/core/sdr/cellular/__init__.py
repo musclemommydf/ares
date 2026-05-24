@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 sdr/cellular — passive cellular decoders for Ares (2G GSM, 3G UMTS, 4G LTE, 5G NR).
 

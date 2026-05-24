@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 tap_nic.py — turn any SDR into a network interface card (NIC) over a TAP/TUN.
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 dvb_pilots.py — DVB-T frame structure: pilot/TPS removal → data cells (EN 300 744 §4.5/4.6).
 

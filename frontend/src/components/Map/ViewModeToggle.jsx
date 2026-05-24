@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * ViewModeToggle — a small 2D / 3D button for the map toolbar (Workstream B, P0).
  * Drop it next to the other map controls in App.jsx.

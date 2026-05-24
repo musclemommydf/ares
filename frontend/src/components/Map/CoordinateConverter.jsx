@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Coordinate converter — type any location and see it rendered in every major
  * coordinate system. Auto-detects input format (DD, DMS, DDM, MGRS, UTM).

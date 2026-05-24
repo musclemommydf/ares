@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Multi-node fusion — combine bearings + time-of-arrival across networked DF
 nodes. Three solvers:

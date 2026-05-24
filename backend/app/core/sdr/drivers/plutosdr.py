@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 ADALM-Pluto driver (Analog Devices AD9363 / AD9364, single-board SDR).
 

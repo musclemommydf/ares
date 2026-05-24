@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 FMCOMMS5 driver (2× AD9361 → 4 phase-coherent RX, on a ZC706/ZCU102 carrier).
 

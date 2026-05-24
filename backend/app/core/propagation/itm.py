@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Irregular Terrain Model (ITM) — Longley-Rice Propagation Model
 Python implementation based on NTIA Technical Note TN-101 and Report 82-100.

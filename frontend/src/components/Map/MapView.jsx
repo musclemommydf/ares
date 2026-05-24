@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Interactive Map View
  * Leaflet map with coverage heatmap overlay, TX/RX markers, terrain profile line,

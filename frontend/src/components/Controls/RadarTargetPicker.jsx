@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { RADAR_TARGETS } from '../../appDefaults'
 
 /** The "RADAR TARGET" picker shown on the Radar tab — sets the radar cross-section

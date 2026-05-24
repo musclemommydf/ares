@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 viterbi_verify.py — verify the true-soft Viterbi against reference performance.
 

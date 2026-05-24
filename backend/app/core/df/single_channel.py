@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 df/single_channel.py — direction-finding & geolocation with a SINGLE-channel SDR.
 

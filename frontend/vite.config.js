@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 // vite-plugin-cesium copies Cesium's static assets (Workers, Assets, Widgets CSS)

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /** A compact toolbar button: a lucide icon over a small label, primary when active. */
 export default function ToolBtn({ icon: Icon, label, active, onClick, style }) {
   return (

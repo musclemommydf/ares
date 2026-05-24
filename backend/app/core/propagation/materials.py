@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 RF Material Properties for Ray Tracing
 Permittivity and conductivity values from ITU-R P.2040-2 and literature.

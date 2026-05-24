@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # bundle_vendor.sh — pre-fetch every vendor dependency so a downstream `install.sh`
 # can run *fully offline*. Run this once on an internet-connected machine; the

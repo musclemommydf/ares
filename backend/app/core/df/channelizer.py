@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Polyphase channelizer — split a wideband IQ capture into N narrow uniform
 sub-channels in a single FFT pass. Each sub-channel is then DF'd / classified

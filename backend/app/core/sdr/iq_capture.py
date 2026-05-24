@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 sdr/iq_capture.py — native, in-process RF/IQ capture for the SDR(s) plugged into the host.
 

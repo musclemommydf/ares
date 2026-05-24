@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Space Weather & Ionospheric Conditions
 Fetches real-time data from NOAA SWPC and applies effects to HF/VHF propagation.

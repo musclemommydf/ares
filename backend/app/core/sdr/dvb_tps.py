@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 dvb_tps.py — DVB-T Transmission Parameter Signalling decode (EN 300 744 §4.6).
 

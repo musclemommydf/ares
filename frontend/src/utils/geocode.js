@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Forward geocoding via OpenStreetMap Nominatim. Shared by the 2D map and the
  * 3D globe toolbars. Returns [{ name, display_name, lat, lon, bounds }] where

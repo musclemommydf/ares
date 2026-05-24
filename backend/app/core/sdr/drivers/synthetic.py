@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Synthetic SDR driver — generates coherent multi-channel IQ for a list of
 phantom emitters at known DoAs. The whole DF pipeline can be exercised without

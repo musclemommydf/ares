@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 dvb_interleaver.py — DVB-T inner bit + symbol interleaver (EN 300 744 §4.3.4).
 

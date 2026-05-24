@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { Radio, Crosshair, Route, MapPin, Network, Hexagon, Scan } from 'lucide-react'
 import AppIcon from '../Common/AppIcon'
 

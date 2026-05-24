@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Backend host resolution — lets the web UI (browser, Electron, Android) drive a
  * *remote* Ares backend, e.g. an SDR appliance on the LAN.

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # install-signalhound.sh — stage the SignalHound vendor SDK and build the
 # community SoapySignalHound bridge, in one shot. The same logic also runs

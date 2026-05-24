@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 sgp4_lib.py — SGP4 satellite propagation (Workstream C).
 

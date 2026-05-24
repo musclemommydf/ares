@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 clutter.py — land-cover (clutter) integration for the propagation engine (Workstream A).
 

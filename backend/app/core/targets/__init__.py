@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 core/targets — per-identifier observation store and peak-RSSI / range-finding
 machinery. The tracker keys every observation by a (kind, value) pair like

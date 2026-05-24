@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * DF alerts — audible + desktop-notification alerts when new bearings or fixes
  * arrive from the DF function.

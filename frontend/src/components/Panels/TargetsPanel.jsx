@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Crosshair, RefreshCw, Send, Trash2, Filter, Radio, Sigma } from 'lucide-react'
 import {

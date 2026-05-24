@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 # Auto-generated from gr-dtv dvbs2_modulator_bc + dvbs2_interleaver_bb
 # (EN 302 307-1/-2 §5.4 constellations, §5.3.3 bit interleaver). DO NOT EDIT.
 #  CONST[mod] = (ring, angle_rad) per Gray label.

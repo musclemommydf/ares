@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 LTE passive PDCCH / SIB1 sniffer wrapper around LTESniffer (or, if that is
 not installed, srsRAN's ``srsue`` binary used in scan mode).

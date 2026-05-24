@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 classic_df.py — the "classic" direction-finding estimators ALARIS DF antennas
 are built for, complementing the super-resolution (MUSIC/Capon) and phase-

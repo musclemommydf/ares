@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Track-and-archive — every confirmed track gets its bearing history + any
 IQ-capture pointers recorded into `data/df_state/track_archive/{id}.json`.

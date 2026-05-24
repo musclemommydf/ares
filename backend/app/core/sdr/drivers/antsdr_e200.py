@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 ANTSDR e200 driver (AD9361-based coherent multi-channel SDR).
 

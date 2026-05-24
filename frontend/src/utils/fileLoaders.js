@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * File loaders for KML, KMZ, GeoJSON, GPX and georeferenced/raster imagery.
  * Returns plain objects describing layers that can be added to the map.

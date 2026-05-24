@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Test script to verify the default emitter AGL has been set to 6ft (1.8288m)
 Run this after the backend dependencies are installed.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * HF 24h Skywave / NVIS Chart
  * Shows a Plotly heatmap of predicted signal quality vs frequency (2-30 MHz)

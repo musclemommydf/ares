@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * TrackHistoryPanel — manage recorded movement tracks (Co-Opt movers, GPS
  * feeds, drone telemetry, etc.) plus a time scrubber for replay.

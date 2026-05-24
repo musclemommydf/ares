@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * DfAlertsSettings — UI for the DF-alerts store ([useDfAlerts]).
  *

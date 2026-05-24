@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * AntennaPattern3D — render the 3-dB beamwidth + first nulls of a DF antenna
  * as a translucent Cesium entity attached to an observer position.

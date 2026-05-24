@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * RF Propagation Simulator — React Native Mobile App
  * Android & iOS using Expo + React Navigation

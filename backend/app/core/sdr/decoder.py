@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 sdr/decoder.py — drive an installed external digital decoder from the live baseband.
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 sdr/native_demod.py — Ares' own in-process software demodulator for UAS video downlinks.
 

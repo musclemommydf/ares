@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * MapSettingsCog — the ⚙ button + popup on the map's floating toolbar.
  * Holds ALL the map options (no more bottom-panel "Map Options" tab):

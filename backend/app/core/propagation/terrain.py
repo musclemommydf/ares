@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Terrain Data Manager
 Auto-downloads and caches SRTM/Copernicus DEM terrain elevation data.

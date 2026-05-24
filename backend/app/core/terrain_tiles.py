@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Ares — serve offline terrain packs to the 3D globe as a Cesium *heightmap*
 terrain provider (Workstream A / B).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 export default function CoverageLegend({ minDbm = -120, maxDbm = 0 }) {
   const levels = [
     { label: `≥ −60 dBm`, color: '#06d6a0', desc: 'Excellent' },

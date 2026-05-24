@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * RemoteAccessControls — remote-control on/off, embedded in the ATAK / Server
  * console (AtakServerPanel) as its "Remote access" section.

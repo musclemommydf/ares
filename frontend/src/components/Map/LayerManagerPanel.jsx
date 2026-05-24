@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Unified manager for all user-added map content:
  *   - Imported KML / KMZ / GeoJSON / GPX layers

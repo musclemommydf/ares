@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * useViewMode — tiny global store for the 2D (Leaflet) ⇄ 3D (Cesium globe) toggle.
  * (Workstream B, P0.) The actual mounting of <MapView> vs lazy <GlobeView> is

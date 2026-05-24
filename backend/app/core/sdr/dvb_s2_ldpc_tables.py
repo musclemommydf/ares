@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 # Auto-generated from EN 302 307-1/-2 Annex B/C (DVB-S2 + S2X LDPC parity-bit
 # accumulator addresses), via gr-dtv, cross-checked vs the ETSI PDF. One row per
 # 360-bit info group; q=(nldpc-kldpc)/360. Rates keyed by literal name (e.g. 26/45

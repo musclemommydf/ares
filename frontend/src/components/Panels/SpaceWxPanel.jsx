@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * The "Space Wx" bottom-panel tab — NOAA SWPC space weather (geomagnetic Kp / F10.7 / storm
  * class, HF radio-blackout, VHF Sporadic-E) plus a quick **HF planning** read-out: a rough

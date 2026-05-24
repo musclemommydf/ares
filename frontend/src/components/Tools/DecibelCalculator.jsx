@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Decibel / Power Calculator
  * Bidirectional conversion between dBm, dBW, dBµW, W, mW, µW, kW, MW

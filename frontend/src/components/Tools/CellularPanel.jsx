@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { useEffect, useState } from 'react'
 import { Radio, Play, Square, RefreshCw, Wifi, Bluetooth, AlertTriangle } from 'lucide-react'
 import {

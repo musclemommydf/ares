@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 IQ-level SDR drivers — one common interface ([SdrDriver]) over coherent and
 single-channel hardware. Distinct from the parent ``sdr/adapters.py``:

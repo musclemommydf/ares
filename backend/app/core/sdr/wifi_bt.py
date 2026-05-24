@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 sdr/wifi_bt.py — passive WiFi + Bluetooth Low Energy monitors.
 

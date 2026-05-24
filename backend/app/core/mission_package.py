@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Ares Mission Package (`.ares-mission` zip) — single-file bundle of an
 operational state. Modelled on RFEye Site mission files + ATAK Data Packages.

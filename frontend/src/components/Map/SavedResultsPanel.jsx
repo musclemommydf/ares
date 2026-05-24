@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Saved Results — a durable, server-side catalog of simulation snapshots, shown
  * inside the Layer Manager. Each entry stores the result GeoJSON, the input

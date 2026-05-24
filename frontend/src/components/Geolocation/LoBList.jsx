@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 import { Pencil, Trash2 } from 'lucide-react'
 import { ENVIRONMENT_PRESETS } from './LoBUtils'
 import { DEVICE_TYPES } from './GeoLocationPanel'

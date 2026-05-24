@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * Renders the result of whichever analysis the active tab ran — Best Site, Route, Multipoint,
  * MANET, Best Server, BSA Polygon. This lives in the bottom "Results" tab; the left-sidebar

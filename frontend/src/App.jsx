@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * RF Propagation Simulator — Main App Component
  * Layout: Header → Sidebar (controls) | Map | Bottom (charts/results)

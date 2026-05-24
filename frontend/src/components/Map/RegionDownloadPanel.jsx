@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * "Download mapping data for a state / country / region" — sits in the Layer Manager. Look up a
  * named region (or have it pre-selected from a right-click on the map), tick which layers you want

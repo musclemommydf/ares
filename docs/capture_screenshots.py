@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 docs/capture_screenshots.py — capture the screenshots embedded in the flyer +
 tutorial PDFs by driving a headless Chromium against a running Ares instance.

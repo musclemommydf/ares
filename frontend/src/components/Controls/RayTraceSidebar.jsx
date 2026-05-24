@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * The sidebar info panel for the 3D-Ray tab — describes the ray-trace and shows the
  * current TX position & frequency it'll use. No interactive controls here; the header

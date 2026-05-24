@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 Ares
+
 /**
  * ChatPanel — group chat over the MANET (Workstream D), the "Chat" bottom-panel tab.
  *

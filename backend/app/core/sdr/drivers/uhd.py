@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 Ettus / NI USRP driver (X310 / N3xx / X4xx / N321 / X410 / X420).
 

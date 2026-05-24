@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 core/regions.py — named admin-regions → bounding boxes, for the "download mapping data for a
 state / country / region" feature in the layer manager and the map's right-click menu.

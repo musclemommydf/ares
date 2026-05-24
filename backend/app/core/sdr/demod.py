@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+
 """
 sdr/demod.py — in-process analog demodulators (NFM / WFM / AM / SSB) → PCM audio.
 
