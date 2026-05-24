@@ -160,6 +160,10 @@ CI (`.github/workflows/ci.yml`) runs both on every push.
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, the checks CI runs (license headers, backend validation harness, frontend tests/build), and the project's house rules (local-only DSP, no fabricated live data, GPL isolation, lawful/passive scope).
+
 ## License
 
 Licensed under either of
