@@ -162,4 +162,11 @@ CI (`.github/workflows/ci.yml`) runs both on every push.
 
 ## License
 
-Open source. The propagation engine (ITS Longley-Rice port + the empirical models) is a clean-room implementation. The patent-encumbered audio vocoders (AMBE / ACELP / IMBE) are **not** bundled — the installer source-builds the open dsd-fme / m17-cxx-demod / acarsdec on demand. GNU Radio + gr-gsm are GPL-3 and isolated to `backend/app/core/sdr/cellular/`; the rest of Ares stays MIT/Apache-clean.
+Licensed under either of
+
+- **MIT license** ([LICENSE-MIT](LICENSE-MIT)), or
+- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
+
+at your option (SPDX: `MIT OR Apache-2.0`). Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Ares by you shall be dual-licensed as above, without any additional terms or conditions.
+
+The propagation engine (ITS Longley-Rice port + the empirical models) is a clean-room implementation. The patent-encumbered audio vocoders (AMBE / ACELP / IMBE) are **not** bundled — the installer source-builds the open dsd-fme / m17-cxx-demod / acarsdec on demand. GNU Radio + gr-gsm are GPL-3 and isolated to `backend/app/core/sdr/cellular/` (optional, guarded runtime imports — never distributed with Ares); the rest of Ares stays MIT/Apache-clean. See [NOTICE](NOTICE) for third-party attributions.

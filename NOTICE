@@ -1,0 +1,30 @@
+Ares — RF Propagation & Geolocation Platform
+Copyright 2026 Ares
+
+This product is licensed under either of
+
+  * Apache License, Version 2.0 (see LICENSE-APACHE), or
+  * MIT license (see LICENSE-MIT)
+
+at your option.
+
+--------------------------------------------------------------------------------
+Third-party components (NOT bundled; installed/built separately at the user's
+option, and licensed under their own terms):
+
+  * GNU Radio and gr-gsm are GPL-3.0. Ares integrates with them only via
+    optional, guarded runtime imports isolated to
+    backend/app/core/sdr/cellular/. They are never distributed with Ares; the
+    end user installs them independently. The rest of Ares is unaffected by
+    their license.
+
+  * SoapySDR (Boost Software License 1.0) and libiio / pyadi-iio (LGPL/GPL,
+    depending on the component) are likewise optional runtime dependencies,
+    not bundled.
+
+  * Patent-encumbered audio vocoders (AMBE / ACELP / IMBE) are not bundled.
+    The installer source-builds dsd-fme / m17-cxx-demod / acarsdec on demand
+    under their respective upstream licenses.
+
+The propagation engine (ITS Longley-Rice port and the empirical models) is a
+clean-room implementation.

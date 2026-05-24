@@ -1,6 +1,7 @@
 {
   "name": "ares",
   "version": "5.2.0-alpha",
+  "license": "MIT OR Apache-2.0",
   "private": true,
   "type": "module",
   "scripts": {
