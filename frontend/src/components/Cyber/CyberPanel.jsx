@@ -12,10 +12,10 @@
  * unless the Authorized-Active gate is on, and every attempt is audit-logged.
  */
 import { useEffect, useState } from 'react'
-import { Bug, ShieldAlert, ShieldCheck, RefreshCw, Usb, Radio, Lock, Unlock } from 'lucide-react'
+import { Bug, ShieldAlert, ShieldCheck, RefreshCw, Usb, Radio, Lock, Unlock, Terminal } from 'lucide-react'
 import {
   getCyberCapabilities, detectCyber, getCyberAuthorized, setCyberAuthorized,
-  runCyberAction, getCyberCaptures,
+  runCyberAction, getCyberCaptures, cyberRawCli,
 } from '../../api/client'
 import { usePolling } from '../../hooks/usePolling'
 
@@ -94,6 +94,77 @@ export default function CyberPanel() {
           captures={captures} onAfterCapture={refreshCaptures}
         />
       ))}
+
+      {/* Raw tool console — works with any connected tool regardless of CLI grammar */}
+      <RawConsole detail={detail} authorized={authorized} />
+    </div>
+  )
+}
+
+function RawConsole({ detail, authorized }) {
+  const tools = detail?.tools || []
+  const [toolId, setToolId] = useState('')
+  const [cmd, setCmd] = useState('')
+  const [out, setOut] = useState(null)
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (tools.length && !tools.some(t => t.id === toolId)) setToolId(tools[0].id)
+  }, [tools, toolId])
+
+  const send = async () => {
+    if (!cmd.trim() || !toolId) return
+    setBusy(true); setErr(''); setOut(null)
+    try {
+      const r = await cyberRawCli(toolId, cmd)
+      setOut(r)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || e?.message || 'failed')
+    } finally { setBusy(false) }
+  }
+
+  const blocked = !authorized
+  return (
+    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: 10, marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, marginBottom: 4 }}>
+        <Terminal size={14} color={ORANGE} /> Raw tool console
+        <span style={{ fontSize: 10, color: RED, marginLeft: 'auto' }}>active</span>
+      </div>
+      <div style={{ fontSize: 11, color: MUTED, marginBottom: 7, lineHeight: 1.4 }}>
+        Send commands straight to a connected tool's CLI — for any capability or grammar the
+        named actions don't cover. Gated + audit-logged (it can transmit/emulate).
+      </div>
+      {tools.length === 0 ? (
+        <div style={{ fontSize: 11, color: MUTED }}>No USB field tool connected.</div>
+      ) : blocked ? (
+        <div style={{ fontSize: 11, color: ORANGE }}>Enable active features above to use the raw console.</div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+            <select value={toolId} onChange={e => setToolId(e.target.value)} style={inp(150)}>
+              {tools.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={cmd} onChange={e => setCmd(e.target.value)} placeholder="e.g. device_info"
+                   onKeyDown={e => { if (e.key === 'Enter') send() }}
+                   style={{ ...inp(0), flex: 1, fontFamily: 'monospace' }} />
+            <button className="btn btn-secondary" disabled={busy || !cmd.trim()}
+                    style={{ borderColor: RED, color: RED }} onClick={send}>
+              {busy ? '…' : 'Send'}
+            </button>
+          </div>
+        </>
+      )}
+      {err && <div style={{ marginTop: 7, fontSize: 11, color: RED }}>⚠ {err}</div>}
+      {out && (
+        <pre style={{ marginTop: 8, fontSize: 10, color: '#9da7b3', background: '#0d1117',
+                      border: `1px solid ${BORDER}`, borderRadius: 4, padding: 8, maxHeight: 200,
+                      overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+          <span style={{ color: GREEN }}>$ {out.command}</span>{'\n'}{out.response || '(no response)'}
+        </pre>
+      )}
     </div>
   )
 }

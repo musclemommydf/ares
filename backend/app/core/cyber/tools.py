@@ -114,6 +114,14 @@ def find_tool(capability: str) -> DetectedTool:
                           f"(plug in a compatible device over USB)")
 
 
+def find_tool_by_id(tool_id: str) -> DetectedTool:
+    """The connected tool with this detect id, else raise ToolUnavailable."""
+    for t in detect_serial_tools():
+        if t.id == tool_id:
+            return t
+    raise ToolUnavailable(f"tool {tool_id!r} is not connected")
+
+
 # ── serial CLI bridge ─────────────────────────────────────────────────────────
 _locks: dict[str, threading.Lock] = {}
 

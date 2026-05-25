@@ -522,6 +522,7 @@ export async function detectCyber()                { const { data } = await api.
 export async function getCyberAuthorized()         { const { data } = await api.get('/cyber/authorized'); return data }
 export async function setCyberAuthorized(enabled)  { const { data } = await api.post('/cyber/authorized', { enabled }); return data }
 export async function runCyberAction(category, action, params = {}) { const { data } = await api.post('/cyber/run', { category, action, params }); return data }
+export async function cyberRawCli(tool_id, command)  { const { data } = await api.post('/cyber/cli', { tool_id, command }); return data }
 export async function getCyberCaptures()            { const { data } = await api.get('/cyber/subghz/captures'); return data }
 // ── MANET group chat ─────────────────────────────────────────────────────────
 export async function getChatMessages(room, limit = 120) { const { data } = await api.get('/chat/messages', { params: { ...(room ? { room } : {}), limit } }); return data }

@@ -35,6 +35,11 @@ class RunRequest(BaseModel):
     params: Optional[dict[str, Any]] = None
 
 
+class CliRequest(BaseModel):
+    tool_id: str
+    command: str
+
+
 @router.get("/capabilities")
 async def capabilities(principal: dict = Depends(require_auth)):
     """Static catalog of capability categories + actions (passive vs active)."""
@@ -62,6 +67,21 @@ async def set_authorized(body: GateRequest, principal: dict = Depends(require_au
 @router.get("/subghz/captures")
 async def subghz_captures(principal: dict = Depends(require_auth)):
     return {"captures": subghz.list_captures()}
+
+
+@router.post("/cli")
+async def raw_cli(body: CliRequest, principal: dict = Depends(require_auth)):
+    """Raw command passthrough to a connected field tool (active — gated + audited)."""
+    try:
+        return cyber.raw_cli(body.tool_id, body.command, by=principal.get("sub", ""))
+    except cyber.NotAuthorized as e:
+        raise HTTPException(403, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except ToolUnavailable as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
 
 
 @router.post("/run")

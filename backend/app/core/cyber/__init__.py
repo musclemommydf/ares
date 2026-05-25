@@ -223,3 +223,22 @@ def run(category: str, action: str, params: Optional[dict] = None, *, by: str = 
 
 
 _PARAM_KEYS = ("uid", "id", "data", "protocol", "pin", "value", "script")
+
+
+def raw_cli(tool_id: str, command: str, *, by: str = "") -> dict:
+    """Send a raw command line to a connected field tool and return its reply verbatim.
+
+    ACTIVE — a raw passthrough can drive transmit / emulate / write, so it requires
+    the authorized-active gate and is audit-logged. This makes the contactless / IR /
+    HID capabilities fully usable regardless of the tool's exact CLI grammar."""
+    command = (command or "").strip()
+    if not command:
+        raise ValueError("empty command")
+    if not authorized_active():
+        audit("cyber.refused", category="raw_cli", action="send", reason="gate_off", by=by)
+        raise NotAuthorized("the raw tool console is an active capability — enable "
+                            "Authorized Active within an authorized scope")
+    tool = tools.find_tool_by_id(tool_id)
+    audit("cyber.active", category="raw_cli", action="send", tool=tool.kind, command=command, by=by)
+    reply = tools.cli(tool.port, tool.baud, command)
+    return {"tool": tool.public(), "command": command, "response": reply}
