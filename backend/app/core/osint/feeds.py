@@ -68,15 +68,6 @@ BUILTIN_FEEDS: dict[str, dict] = {
              "options": ["15min", "1h", "6h", "1d", "3d", "1w"]},
         ],
     },
-    "aircraft": {
-        "id": "aircraft", "name": "Live aircraft (ADS-B)", "category": "tracks",
-        "description": "Live aircraft positions (OpenSky; military via adsb.lol).",
-        "attribution": "OpenSky Network / adsb.lol", "color": "#22d3ee", "requires_config": False,
-        "big": True, "wants_bbox": True, "url": "https://opensky-network.org/",
-        "params": [
-            {"key": "military", "label": "Military only", "type": "bool", "default": False},
-        ],
-    },
     "flights": {
         "id": "flights", "name": "Global flights (airplanes.live)", "category": "tracks",
         "description": "Live aircraft from the airplanes.live community ADS-B network — no key, "
@@ -498,40 +489,6 @@ async def _fetch_gdelt(fd, params, bbox, cfg) -> dict:
     return _geojson_passthrough(await _http_json(url))
 
 
-async def _fetch_aircraft(fd, params, bbox, cfg) -> dict:
-    if params.get("military"):
-        data = await _http_json("https://api.adsb.lol/v2/mil")
-        feats = []
-        for ac in (data.get("ac") or []):
-            lat, lon = ac.get("lat"), ac.get("lon")
-            if lat is None or lon is None:
-                continue
-            feats.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                          "properties": {"name": (ac.get("flight") or ac.get("r") or ac.get("hex") or "").strip(),
-                                         "icao": ac.get("hex"), "alt_ft": ac.get("alt_baro"),
-                                         "speed_kt": ac.get("gs"), "heading_deg": ac.get("track"),
-                                         "type": ac.get("t"), "kind": "aircraft", "military": True}})
-        return _fc(feats)
-    # OpenSky bounding-box query (lamin/lomin/lamax/lomax = s/w/n/e)
-    if bbox:
-        w, s, e, n = bbox
-        url = f"https://opensky-network.org/api/states/all?lamin={s}&lomin={w}&lamax={n}&lomax={e}"
-    else:
-        url = "https://opensky-network.org/api/states/all"
-    data = await _http_json(url)
-    feats = []
-    for st in (data.get("states") or []):
-        lon, lat = st[5], st[6]
-        if lon is None or lat is None:
-            continue
-        feats.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                      "properties": {"name": (st[1] or "").strip() or st[0], "icao": st[0],
-                                     "country": st[2], "alt_m": st[7] or st[13],
-                                     "speed_ms": st[9], "heading_deg": st[10],
-                                     "on_ground": st[8], "kind": "aircraft"}})
-    return _fc(feats)
-
-
 def _emergency_label(squawk: str, emergency: Any) -> Optional[str]:
     """Map a transponder code / ADS-B emergency field to a human label."""
     code = {"7500": "hijack", "7600": "radio-failure", "7700": "general-emergency"}.get(squawk)
@@ -875,7 +832,7 @@ async def _fetch_gpsjam(fd, params, bbox, cfg) -> dict:
 
 
 _FETCHERS = {
-    "deepstate": _fetch_deepstate, "gdelt": _fetch_gdelt, "aircraft": _fetch_aircraft,
+    "deepstate": _fetch_deepstate, "gdelt": _fetch_gdelt,
     "flights": _fetch_flights, "gpsjam": _fetch_gpsjam,
     "nasa_firms": _fetch_nasa_firms, "acled": _fetch_acled, "aisstream": _fetch_aisstream,
     "liveuamap": _fetch_liveuamap, "signalcockpit": _fetch_signalcockpit, "aprs": _fetch_aprs,
