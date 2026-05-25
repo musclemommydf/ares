@@ -17,6 +17,26 @@ radial-menu + CoT-receive depth → D1 build/CI/TAK-Server (blocked on tak.gov S
 
 ---
 
+## Status (implemented on the `track-d` branch)
+
+| Item | State | Verified |
+|---|---|---|
+| D3 Tauri shell (Option A: backend lifecycle, remote commands, init-script shim) | done | `cargo check` + clippy clean; **app launches + spawns backend + serves UI** |
+| D3.3 first-run bootstrap · D3.5 menu/dark/single-instance · exit-cleanup | done | compiles; runs |
+| D2.1 compact codec + transport seam | done | 6/6 harness |
+| D2.2 Meshtastic bridge · D2.3 Silvus adapter · D2.5 built-in TLS | done | 4/4 harness (lib/radio lazy-imported) |
+| D2.4 transitive gossip + hop-cap | already in `mesh.py` | — |
+| D1.4b inbound LoB/fix CoT parse | done | 5/5 harness |
+| D1.3 radial menu · D1.4a CoT listener · D1.2 CI matrix | written, **SDK-blocked** | not compiled — needs tak.gov SDK |
+| D1.1 APK build · D1.5 TAK-Server live test | **blocked** | needs SDK / a running TAK Server |
+| D4 PyO3 seam + baselines | done | crate `cargo check` clean; benchmark runs; pure-Python fallback |
+
+Everything verifiable in this environment is green; the only remainders are
+hard-blocked on the tak.gov ATAK-CIV SDK + Android toolchain (D1.1/1.2/1.3/1.4a) or a
+live TAK Server (D1.5).
+
+---
+
 ## D1 — ATAK plugin / server
 
 ### Current state (mature)
