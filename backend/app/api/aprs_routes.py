@@ -6,6 +6,7 @@ api/aprs_routes.py — APRS decode + station map feed.
 
   GET    /aprs/status                 — module status (station / fix counts)
   POST   /aprs/decode                 — decode TNC2 lines and/or AX.25 hex frames  [auth]
+  POST   /aprs/demod                  — AFSK1200 demod audio/IQ → frames → stations [auth]
   GET    /aprs/stations               — decoded stations (table)
   GET    /aprs/stations.geojson       — decoded stations as a GeoJSON layer (the map feed)
   DELETE /aprs/stations               — clear the station table                     [auth]
@@ -29,6 +30,12 @@ router = APIRouter(tags=["aprs"], prefix="/aprs")
 class DecodeReq(BaseModel):
     lines: list[str] = Field(default_factory=list, description="TNC2 text frames (SRC>DEST,path:info)")
     hex: list[str] = Field(default_factory=list, description="AX.25 / KISS frames as hex strings")
+
+
+class DemodReq(BaseModel):
+    audio: list[float] = Field(default_factory=list, description="FM-discriminator audio samples")
+    iq: list[list[float]] = Field(default_factory=list, description="IQ samples as [[re, im], …]")
+    fs: int = Field(48000, description="sample rate (Hz)")
 
 
 def _station_dict(st: aprs.Station) -> dict:
@@ -64,6 +71,25 @@ def decode(req: DecodeReq, _auth=Depends(require_auth)) -> dict:
             updated.append(_station_dict(st))
     audit("aprs.decode", frames=len(req.lines) + len(req.hex), updated=len(updated))
     return {"updated": updated, "stations": len(aprs.decoder.stations)}
+
+
+@router.post("/demod")
+def demod(req: DemodReq, _auth=Depends(require_auth)) -> dict:
+    """Demodulate AFSK1200 audio (or FM IQ) → AX.25 frames → APRS stations."""
+    from app.core.sdr import afsk1200
+    if req.iq:
+        import numpy as np
+        z = np.array([complex(p[0], p[1]) for p in req.iq], dtype=np.complex64)
+        frames = afsk1200.demod_iq(z, req.fs)
+    else:
+        frames = afsk1200.demod(req.audio, req.fs)
+    updated: list[dict] = []
+    for fr in frames:
+        st = aprs.decoder.step(fr)
+        if st:
+            updated.append(_station_dict(st))
+    audit("aprs.demod", samples=len(req.audio) or len(req.iq), frames=len(frames), updated=len(updated))
+    return {"frames": len(frames), "updated": updated, "stations": len(aprs.decoder.stations)}
 
 
 @router.get("/stations")

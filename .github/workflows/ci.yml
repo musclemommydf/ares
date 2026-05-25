@@ -53,6 +53,9 @@ jobs:
       - name: APRS decoder harness (AX.25 / uncompressed / compressed / Mic-E)
         working-directory: backend
         run: python -m tests.test_aprs
+      - name: AFSK1200 + HDLC modem harness (RF → AX.25 round-trip)
+        working-directory: backend
+        run: python -m tests.test_afsk1200
 
   frontend:
     name: frontend — bundle check
