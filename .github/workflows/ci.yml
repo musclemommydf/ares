@@ -50,6 +50,9 @@ jobs:
       - name: Mesh transports harness — Meshtastic + Silvus (Track D / D2.2-2.3)
         working-directory: backend
         run: python -m tests.test_mesh_transports
+      - name: APRS decoder harness (AX.25 / uncompressed / compressed / Mic-E)
+        working-directory: backend
+        run: python -m tests.test_aprs
 
   frontend:
     name: frontend — bundle check
