@@ -12,7 +12,7 @@ Rough road-map:
 
 -ATAK plugin/server development
 
--DSP refinement/correction
+-DSP refinement/correction, Satphone decode
 
 -MANET (Silvus/Meshtastic) and Remote-access development
 
@@ -20,9 +20,13 @@ Rough road-map:
 
 -Power draw management
 
--ML-based signals classification on Jetson Orin
+-ML-based signals classification on Jetson Orin, Custom signals database
 
 -Sweep spectrum for FMCOMMS5
+
+-Malicious signals identification: IMSI-catcher detection (rogue eNodeB identification), GPS/Cell jamming/spoofing, TEMPEST emissions,TPMS trackers, Cellular downgrade attacks, Cell/PTT Denial of Service, Evil twin APs, Deauth flood attacks, Rogue airtag, replay attacks, drone swarms,sub-carrier hides, Rogue FM/ISM band
+
+-Pentest: Flipper zero/HackRF/H4M/Proxmark capabilities and identification
 
 -18GHz downconversion for FMCOMMS5 (long-term goal)
 
