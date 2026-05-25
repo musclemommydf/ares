@@ -41,6 +41,9 @@ jobs:
       - name: Validation harness (ITM / DF / TDOA / SGP4 / HF / interferometry / security)
         working-directory: backend
         run: python -m tests.test_validation
+      - name: MANET compact-codec harness (Track D / D2.1)
+        working-directory: backend
+        run: python -m tests.test_mesh_codec
 
   frontend:
     name: frontend — bundle check
