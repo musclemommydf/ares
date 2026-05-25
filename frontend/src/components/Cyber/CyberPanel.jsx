@@ -12,7 +12,7 @@
  * unless the Authorized-Active gate is on, and every attempt is audit-logged.
  */
 import { useEffect, useState } from 'react'
-import { Bug, ShieldAlert, ShieldCheck, RefreshCw, Usb, Radio, Lock, Unlock, Terminal } from 'lucide-react'
+import { Bug, ShieldAlert, ShieldCheck, Lock, Unlock, Terminal } from 'lucide-react'
 import {
   getCyberCapabilities, detectCyber, getCyberAuthorized, setCyberAuthorized,
   runCyberAction, getCyberCaptures, cyberRawCli,
@@ -83,8 +83,7 @@ export default function CyberPanel() {
       {/* Authorized & lawful use / gate */}
       <GateCard authorized={authorized} ack={ack} setAck={setAck} busy={busy} onToggle={toggleGate} />
 
-      {/* Connected hardware */}
-      <HardwareCard detail={detail} onRefresh={() => detectCyber().then(setDetail).catch(() => {})} />
+      {/* (Connected-hardware detection lives in the SDR console as "Pentest tools".) */}
 
       {/* Capability cards */}
       {catalog.map(cat => (
@@ -207,37 +206,6 @@ function GateCard({ authorized, ack, setAck, busy, onToggle }) {
   )
 }
 
-function HardwareCard({ detail, onRefresh }) {
-  const tools = detail?.tools || []
-  const radios = detail?.subghz_radios || []
-  return (
-    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: 10, marginBottom: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ fontWeight: 600 }}>Connected hardware</span>
-        <button className="btn btn-ghost" style={{ padding: '2px 6px' }} onClick={onRefresh} title="Re-scan">
-          <RefreshCw size={12} />
-        </button>
-      </div>
-      {tools.length === 0 && radios.length === 0 && (
-        <div style={{ fontSize: 11, color: MUTED }}>Nothing detected. Connect an SDR (sub-GHz) or a USB
-          field tool (RFID/NFC/IR/iButton/GPIO/HID).</div>
-      )}
-      {radios.map(r => (
-        <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '2px 0' }}>
-          <Radio size={12} color={GREEN} />
-          <span>{r.label}</span>
-          <span style={{ color: MUTED }}>· sub-GHz{r.tx ? ' · TX' : ' · RX only'}{r.busy ? ' · busy' : ''}</span>
-        </div>
-      ))}
-      {tools.map(t => (
-        <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '2px 0' }}>
-          <Usb size={12} color={GREEN} />
-          <span>{t.label}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
 
 function CapabilityCard({ cat, authorized, available, captures, onAfterCapture }) {
   const [params, setParams] = useState({ center_mhz: '433.92', seconds: '1', value: '0' })

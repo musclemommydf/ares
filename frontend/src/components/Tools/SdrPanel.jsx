@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { X, Plus, RefreshCw, Trash2, Wifi, WifiOff, AlertCircle, Activity, Radio, Save, Cpu, Network, Crosshair, Terminal, Copy, Pencil } from 'lucide-react'
 import CellularPanel from './CellularPanel'
+import PentestTools from '../Cyber/PentestTools'
 import {
   listSdrDevices, createSdrDevice, updateSdrDevice, deleteSdrDevice, testSdrDevice,
   getDfAccuracyEstimate, getGpsFix, setGpsFix,
@@ -986,6 +987,10 @@ export default function SdrPanel({ onClose, mapCenter, sdr, onPickLocation, mapF
               Live-AoA solve, LoB workflow and the DF picture live on the <strong>DF</strong> tab — this section is now just SoapySDR /
               SDR-discovery status so the SDR console stays a setup surface.
             </div>
+          </Section>
+
+          <Section title="Pentest tools">
+            <PentestTools />
           </Section>
 
           <CellularPanel devices={iqBackend?.devices || []} />
