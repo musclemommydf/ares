@@ -62,6 +62,7 @@ log = logging.getLogger(__name__)
 
 _C = 299_792_458.0
 _IDLE_DWELL = 2.0    # seconds between heartbeats while idling (no subscribers)
+_HW_REPROBE_S = 20.0  # while stuck on the synthetic fallback, retry the real radio this often
 
 
 class LiveDfAdapter(_Base):
@@ -109,6 +110,7 @@ class LiveDfAdapter(_Base):
         self._squelch = {}              # vfo name → vfo.SquelchTracker
         self._floor_hist = None         # df.vfo.SquelchTracker shared noise-floor estimator
         self._backend_label = ""        # driver backend ("pyadi"/"soapy"/"synthetic") for spectrum source
+        self._last_hw_probe = 0.0       # last time we retried the real radio while on the synthetic fallback
         self._spectrum = None           # cached wideband PSD from the live capture (feeds the DF panel)
         self._audio = None              # active "Listen" session (carves an audio channel from the capture)
 
@@ -532,6 +534,13 @@ class LiveDfAdapter(_Base):
                         self._idle = False
                         self.report("streaming")
                         log.info("live-DF %s: client connected — resuming capture", self.dev.id)
+                    # Self-heal: if a real radio was configured but the open fell back
+                    # to synthetic (e.g. the device was momentarily owned by another
+                    # process), periodically retry the real open and hot-swap it in.
+                    if (self._backend_label == "synthetic" and self.driver_id != "synthetic"
+                            and time.time() - self._last_hw_probe >= _HW_REPROBE_S):
+                        self._last_hw_probe = time.time()
+                        await loop.run_in_executor(None, self._try_upgrade_to_hardware)
                     # operator-forced recalibration (POST /df/live/{id}/calibrate)
                     force = float((self.dev.metadata or {}).get("force_cal") or 0.0)
                     if force and force != self._force_cal_seen:
@@ -558,6 +567,38 @@ class LiveDfAdapter(_Base):
                 self.report("error", f"{type(e).__name__}: {e}")
                 await loop.run_in_executor(None, self._close_driver)
                 await asyncio.sleep(min(30.0, backoff)); backoff = min(30.0, backoff * 2)
+
+    def _try_upgrade_to_hardware(self) -> None:
+        """Running on the synthetic fallback though a real driver was configured —
+        try to (re)open the real radio and hot-swap it in for the synthetic one.
+        No-op if the radio is still unreachable (we stay synthetic and retry on the
+        next interval). Runs between captures, so swapping ``self._driver`` is safe.
+        BLOCKING: call from an executor, not the event loop."""
+        from app.core.sdr import drivers
+        try:
+            kwargs = dict(self.driver_args)
+            kwargs.setdefault("channels", int(self.dev.channels))
+            if self._arrays_geom is not None:
+                kwargs.setdefault("array", self._arrays_geom)
+            probe = drivers.create(self.driver_id, **kwargs)
+            probe.open()
+        except Exception as e:
+            log.debug("live-DF %s: hardware re-probe failed: %s", self.dev.id, e)
+            return
+        backend = str(getattr(probe, "_backend", None) or self.driver_id)
+        if backend == "synthetic":
+            try: probe.close()
+            except Exception: pass
+            return
+        old, self._driver = self._driver, probe        # swap the real radio in
+        self._backend_label = backend
+        self._applied_freq = self._applied_rate = None  # force _retune onto the new handle
+        self._applied_gain = "<unset>"
+        if old is not None:
+            try: old.close()
+            except Exception: pass
+        log.info("live-DF %s: upgraded synthetic→%s (real radio reachable again)", self.dev.id, backend)
+        self.report("streaming")
 
     def _solve_all(self, X: np.ndarray) -> list[dict]:
         """Down-convert every VFO and DF the open ones. Squelch logic:

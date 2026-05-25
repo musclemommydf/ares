@@ -4,6 +4,18 @@
 """
 Ares — FastAPI Application Entry Point
 """
+# Real-time DSP works on tiny per-call arrays (IQ blocks, DF solves). On a
+# many-core host, OpenBLAS fans every op across all cores and spin-waits between
+# calls — ~1 thread/core idling, pegging multiple cores and starving the asyncio
+# event loop (→ laggy DF panel). Threaded BLAS is pure overhead at these sizes,
+# so cap the math-thread pools. MUST run before numpy is first imported. Override
+# any of these env vars for heavy offline/batch workloads.
+import os as _os
+for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+           "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    _os.environ.setdefault(_v, "1")
+_os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
