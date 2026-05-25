@@ -48,3 +48,19 @@ def diffraction_db(model, elevations, distances, tx_height_m, rx_height_m, freq_
 def itm_hzns(pfl, hg0, hg1, gme, dist):
     """Native ITM horizon analysis → (the0, the1, dl0, dl1). Call only when HAS_NATIVE."""
     return _native.itm_hzns([float(x) for x in pfl], float(hg0), float(hg1), float(gme), float(dist))
+
+
+def rs_decode_204(code204):
+    """Native RS(204,188) decode → (data188_bytes | None, n_errors). Call only when HAS_NATIVE."""
+    res, nerr = _native.rs_decode_204(list(code204))
+    return (bytes(res) if res is not None else None), nerr
+
+
+def dvb_derandomise(packets):
+    """Native DVB energy-dispersal de-randomiser → bytes. Call only when HAS_NATIVE."""
+    return bytes(_native.dvb_derandomise(list(packets)))
+
+
+def viterbi_decode(soft_pairs, terminated):
+    """Native DVB-T soft Viterbi → list[int] bits. Call only when HAS_NATIVE."""
+    return _native.viterbi_decode([float(x) for x in soft_pairs], bool(terminated))

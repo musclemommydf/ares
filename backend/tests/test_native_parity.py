@@ -27,6 +27,7 @@ sys.path.insert(0, ".")
 from app.core import native
 from app.core.propagation import diffraction as D
 from app.core.propagation.itm_its import IrregularTerrainModel as ITM
+from app.core.sdr import dvb_fec, dvb_inner_fec
 
 _TOL = 1e-6
 
@@ -113,8 +114,90 @@ def test_speedup():
             f"_hzns {speed_h:.1f}×")
 
 
+def test_rs_parity():
+    if not native.HAS_NATIVE:
+        return ("RS(204,188) parity", True, "SKIPPED — ares_native not built")
+    import random
+    rng = random.Random(0)
+    mism = 0
+    for _ in range(300):
+        data = bytes(rng.randrange(256) for _ in range(188))
+        code = bytearray(dvb_fec.rs_encode(data))
+        for pos in rng.sample(range(204), rng.randint(0, 8)):
+            code[pos] ^= rng.randint(1, 255)
+        c = bytes(code)
+        if dvb_fec._rs_decode_py(c) != native.rs_decode_204(c):
+            mism += 1
+    # uncorrectable (> t): both must agree on (None, -1)
+    code = bytearray(dvb_fec.rs_encode(bytes(range(188))))
+    for pos in range(9):
+        code[pos] ^= 0xFF
+    over = dvb_fec._rs_decode_py(bytes(code)) == native.rs_decode_204(bytes(code))
+    ok = mism == 0 and over
+    return ("RS(204,188) parity (300 + >t)", ok, f"mismatches={mism}, >t agrees={over}")
+
+
+def test_derandomise_parity():
+    if not native.HAS_NATIVE:
+        return ("derandomise parity", True, "SKIPPED — ares_native not built")
+    import random
+    rng = random.Random(1)
+    ok = True
+    for npkt in (1, 8, 9, 20):
+        pkts = bytes(rng.randrange(256) for _ in range(npkt * 188))
+        if native.dvb_derandomise(pkts) != dvb_fec._derandomise_py(pkts):
+            ok = False
+    return ("derandomise parity (1/8/9/20 pkts)", ok, "byte-identical" if ok else "MISMATCH")
+
+
+def test_viterbi_parity():
+    if not native.HAS_NATIVE:
+        return ("Viterbi parity", True, "SKIPPED — ares_native not built")
+    import random
+    rng = random.Random(2)
+    mism = 0
+    for _ in range(20):
+        info = [rng.randint(0, 1) for _ in range(500)]
+        soft = [1.0 if b == 0 else -1.0 for b in dvb_inner_fec.conv_encode(info)]
+        for _ in range(rng.randint(0, 15)):
+            soft[rng.randrange(len(soft))] *= -1
+        for term in (True, False):
+            if dvb_inner_fec.viterbi_decode_py(soft, term) != native.viterbi_decode(soft, term):
+                mism += 1
+    return ("Viterbi parity (20×2)", mism == 0, f"mismatches={mism}")
+
+
+def test_dvb_speedup():
+    if not native.HAS_NATIVE:
+        return ("DVB speedup", True, "SKIPPED — ares_native not built")
+    import random
+    rng = random.Random(3)
+    code = bytearray(dvb_fec.rs_encode(bytes(rng.randrange(256) for _ in range(188))))
+    for pos in rng.sample(range(204), 8):
+        code[pos] ^= rng.randint(1, 255)
+    code = bytes(code)
+    soft = [1.0 if b == 0 else -1.0 for b in dvb_inner_fec.conv_encode([rng.randint(0, 1) for _ in range(1000)])]
+
+    def bench(fn, it):
+        fn()
+        t0 = time.perf_counter()
+        for _ in range(it):
+            fn()
+        return (time.perf_counter() - t0) / it * 1e3
+
+    rs_py = bench(lambda: dvb_fec._rs_decode_py(code), 400)
+    rs_rs = bench(lambda: native.rs_decode_204(code), 400)
+    v_py = bench(lambda: dvb_inner_fec.viterbi_decode_py(soft, True), 30)
+    v_rs = bench(lambda: native.viterbi_decode(soft, True), 30)
+    return ("DVB speedup (info)", True,
+            f"RS {rs_py/rs_rs:.1f}× ({rs_py:.3f}→{rs_rs:.3f} ms), "
+            f"Viterbi {v_py/v_rs:.1f}× ({v_py:.2f}→{v_rs:.2f} ms)")
+
+
 def main() -> int:
-    tests = [test_diffraction_parity, test_itm_hzns_parity, test_speedup]
+    tests = [test_diffraction_parity, test_itm_hzns_parity,
+             test_rs_parity, test_derandomise_parity, test_viterbi_parity,
+             test_speedup, test_dvb_speedup]
     passed = 0
     print("=" * 72)
     print(f"Ares — native oxidation parity (HAS_NATIVE={native.HAS_NATIVE})")

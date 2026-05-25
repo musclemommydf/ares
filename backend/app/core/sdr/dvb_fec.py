@@ -78,11 +78,20 @@ def _prbs_sequence(n: int) -> bytes:
 
 
 def derandomise(packets: bytes) -> bytes:
-    """De-randomise a run of 188-byte TS packets. The sync byte of every 8th packet
-    is 0xB8 (inverted 0x47); PRBS is reset there and runs over the next 8 packets'
-    payloads (sync bytes are passed through, restored to 0x47)."""
+    """De-randomise a run of 188-byte TS packets. Rust fast path (D4) with a
+    pure-Python fallback (_derandomise_py is the parity ground truth)."""
     if len(packets) % 188 != 0:
         raise ValueError("derandomise expects a whole number of 188-byte packets")
+    from app.core import native
+    if native.HAS_NATIVE:
+        try:
+            return native.dvb_derandomise(packets)
+        except Exception:
+            pass
+    return _derandomise_py(packets)
+
+
+def _derandomise_py(packets: bytes) -> bytes:
     out = bytearray(packets)
     n_pkt = len(packets) // 188
     prbs = _prbs_sequence(187 * 8)   # one PRBS run covers 8 packets × 187 payload bytes
@@ -174,11 +183,22 @@ def _poly_div(dividend: list[int], divisor: list[int]) -> tuple[list[int], list[
 
 
 def rs_decode(code204: bytes) -> tuple[Optional[bytes], int]:
-    """Decode a 204-byte RS codeword (high-order = first byte). Returns
-    ``(data188 | None, n_errors)``; ``(None, -1)`` if uncorrectable (> t=8).
+    """Decode a 204-byte RS codeword → ``(data188 | None, n_errors)``; ``(None, -1)``
+    if uncorrectable (> t=8). Rust fast path (D4) with a pure-Python fallback
+    (_rs_decode_py is the parity ground truth)."""
+    if len(code204) != 204:
+        raise ValueError("rs_decode expects 204 bytes")
+    from app.core import native
+    if native.HAS_NATIVE:
+        try:
+            return native.rs_decode_204(code204)
+        except Exception:
+            pass
+    return _rs_decode_py(code204)
 
-    Faithful port of the "Reed-Solomon for coders" errors-only decoder:
-    syndromes → Berlekamp-Massey → Chien → Forney (product-form denominator)."""
+
+def _rs_decode_py(code204: bytes) -> tuple[Optional[bytes], int]:
+    """Errors-only decoder: syndromes → Berlekamp-Massey → Chien → Forney."""
     if len(code204) != 204:
         raise ValueError("rs_decode expects 204 bytes")
     # Decode as the full RS(255,239) with 51 virtual zero bytes at the front

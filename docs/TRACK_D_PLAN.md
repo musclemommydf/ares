@@ -31,6 +31,7 @@ radial-menu + CoT-receive depth → D1 build/CI/TAK-Server (blocked on tak.gov S
 | D1.1 APK build · D1.5 TAK-Server live test | **blocked** | needs SDK / a running TAK Server |
 | D4 PyO3 seam + baselines | done | crate `cargo check` clean; benchmark runs; pure-Python fallback |
 | D4 ports: diffraction (5 models) + ITM `_hzns` | done | **bit-identical parity** vs Python (Δ=0); deygout **20.5×**, `_hzns` 3.6×; CI `native` job |
+| D4 ports: DVB FEC chain (RS(204,188) + derandomise + Viterbi) | done | **byte-identical** parity (300+ RS trials, 20×2 Viterbi); RS **23×**, Viterbi **38×**; round-trip self-tests pass on both paths |
 
 Everything verifiable in this environment is green; the only remainders are
 hard-blocked on the tak.gov ATAK-CIV SDK + Android toolchain (D1.1/1.2/1.3/1.4a) or a

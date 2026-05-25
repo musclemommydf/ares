@@ -294,11 +294,315 @@ fn itm_hzns(pfl: Vec<f64>, hg0: f64, hg1: f64, gme: f64, dist: f64) -> (f64, f64
     (the0, the1, dl0, dl1)
 }
 
+// ── DVB FEC chain (mirror dvb_fec.py / dvb_inner_fec.py exactly) ──────────────
+use std::sync::OnceLock;
+
+const PRIM: u16 = 0x11D;
+const NROOTS: usize = 16;
+
+struct Gf {
+    exp: [u8; 512],
+    log: [u8; 256],
+}
+
+fn gf() -> &'static Gf {
+    static G: OnceLock<Gf> = OnceLock::new();
+    G.get_or_init(|| {
+        let mut exp = [0u8; 512];
+        let mut log = [0u8; 256];
+        let mut x: u16 = 1;
+        for i in 0..255 {
+            exp[i] = x as u8;
+            log[x as usize] = i as u8;
+            x <<= 1;
+            if x & 0x100 != 0 {
+                x ^= PRIM;
+            }
+        }
+        for i in 255..512 {
+            exp[i] = exp[i - 255];
+        }
+        Gf { exp, log }
+    })
+}
+
+#[inline]
+fn gmul(g: &Gf, a: u8, b: u8) -> u8 {
+    if a == 0 || b == 0 {
+        0
+    } else {
+        g.exp[g.log[a as usize] as usize + g.log[b as usize] as usize]
+    }
+}
+#[inline]
+fn gdiv(g: &Gf, a: u8, b: u8) -> u8 {
+    if a == 0 || b == 0 {
+        0
+    } else {
+        g.exp[(g.log[a as usize] as i32 - g.log[b as usize] as i32).rem_euclid(255) as usize]
+    }
+}
+#[inline]
+fn gpow(g: &Gf, p: i32) -> u8 {
+    g.exp[p.rem_euclid(255) as usize]
+}
+
+/// Horner eval, high-order coefficient first.
+fn poly_eval(g: &Gf, poly: &[u8], x: u8) -> u8 {
+    let mut y = poly[0];
+    for &c in &poly[1..] {
+        y = gmul(g, y, x) ^ c;
+    }
+    y
+}
+/// Eval a low-order-first polynomial at x.
+fn eval_lo(g: &Gf, poly_lo: &[u8], x: u8) -> u8 {
+    let mut y = 0u8;
+    let mut xp = 1u8;
+    for &c in poly_lo {
+        y ^= gmul(g, c, xp);
+        xp = gmul(g, xp, x);
+    }
+    y
+}
+fn poly_scale(g: &Gf, p: &[u8], s: u8) -> Vec<u8> {
+    p.iter().map(|&c| gmul(g, c, s)).collect()
+}
+fn poly_mul(g: &Gf, p: &[u8], q: &[u8]) -> Vec<u8> {
+    let mut r = vec![0u8; p.len() + q.len() - 1];
+    for (i, &a) in p.iter().enumerate() {
+        if a != 0 {
+            for (j, &b) in q.iter().enumerate() {
+                r[i + j] ^= gmul(g, a, b);
+            }
+        }
+    }
+    r
+}
+/// Right-aligned XOR add (matches dvb_fec._poly_add).
+fn poly_add(p: &[u8], q: &[u8]) -> Vec<u8> {
+    let n = p.len().max(q.len());
+    let mut r = vec![0u8; n];
+    for i in 0..p.len() {
+        r[i + n - p.len()] = p[i];
+    }
+    for i in 0..q.len() {
+        r[i + n - q.len()] ^= q[i];
+    }
+    r
+}
+
+/// RS(204,188) errors-only decode → (Some(data188), n_errors) or (None, -1).
+#[pyfunction]
+fn rs_decode_204(code: Vec<u8>) -> (Option<Vec<u8>>, i32) {
+    if code.len() != 204 {
+        return (None, -1);
+    }
+    let g = gf();
+    const PAD: usize = 255 - 204;
+    let mut msg = vec![0u8; PAD];
+    msg.extend_from_slice(&code);
+    let n = msg.len(); // 255
+
+    let mut synd = vec![0u8; NROOTS + 1];
+    for i in 0..NROOTS {
+        synd[i + 1] = poly_eval(g, &msg, gpow(g, i as i32));
+    }
+    if *synd.iter().max().unwrap() == 0 {
+        return (Some(msg[PAD..PAD + 188].to_vec()), 0);
+    }
+
+    // Berlekamp-Massey → error locator Λ (high-order first)
+    let mut err_loc: Vec<u8> = vec![1];
+    let mut old_loc: Vec<u8> = vec![1];
+    let synd_shift = synd.len() - NROOTS; // = 1
+    for i in 0..NROOTS {
+        let kk = i + synd_shift;
+        let mut delta = synd[kk];
+        for j in 1..err_loc.len() {
+            delta ^= gmul(g, err_loc[err_loc.len() - (j + 1)], synd[kk - j]);
+        }
+        old_loc.push(0);
+        if delta != 0 {
+            if old_loc.len() > err_loc.len() {
+                let new_loc = poly_scale(g, &old_loc, delta);
+                old_loc = poly_scale(g, &err_loc, gdiv(g, 1, delta));
+                err_loc = new_loc;
+            }
+            err_loc = poly_add(&err_loc, &poly_scale(g, &old_loc, delta));
+        }
+    }
+    while !err_loc.is_empty() && err_loc[0] == 0 {
+        err_loc.remove(0);
+    }
+    let errs = err_loc.len() as i32 - 1;
+    if errs * 2 > NROOTS as i32 || errs == 0 {
+        return (None, -1);
+    }
+
+    // Chien: Λ low-order first; error at index k ⇒ Λ(α^-(n-1-k)) = 0
+    let lam_lo: Vec<u8> = err_loc.iter().rev().copied().collect();
+    let mut err_pos: Vec<usize> = Vec::new();
+    for k in 0..n {
+        let xk_inv = gpow(g, -((n - 1 - k) as i32));
+        if eval_lo(g, &lam_lo, xk_inv) == 0 {
+            err_pos.push(k);
+        }
+    }
+    if err_pos.len() as i32 != errs {
+        return (None, -1);
+    }
+
+    // Forney
+    let s_lo: Vec<u8> = synd[1..].to_vec();
+    let omega_full = poly_mul(g, &lam_lo, &s_lo);
+    let omega_lo = &omega_full[..NROOTS.min(omega_full.len())];
+    let mut e = vec![0u8; n];
+    for &k in &err_pos {
+        let xk = gpow(g, (n - 1 - k) as i32);
+        let xk_inv = gdiv(g, 1, xk);
+        let mut denom = 1u8;
+        for &k2 in &err_pos {
+            if k2 != k {
+                denom = gmul(g, denom, 1 ^ gmul(g, xk_inv, gpow(g, (n - 1 - k2) as i32)));
+            }
+        }
+        if denom == 0 {
+            return (None, -1);
+        }
+        e[k] = gdiv(g, eval_lo(g, omega_lo, xk_inv), denom);
+    }
+    let msg = poly_add(&msg, &e);
+    for i in 0..NROOTS {
+        if poly_eval(g, &msg, gpow(g, i as i32)) != 0 {
+            return (None, -1);
+        }
+    }
+    (Some(msg[PAD..PAD + 188].to_vec()), err_pos.len() as i32)
+}
+
+/// DVB energy-dispersal de-randomiser over whole 188-byte TS packets.
+#[pyfunction]
+fn dvb_derandomise(packets: Vec<u8>) -> Vec<u8> {
+    let n_pkt = packets.len() / 188;
+    // PRBS x^15+x^14+1, seed 0b100101010000000, over 8×187 payload bytes.
+    let mut prbs = vec![0u8; 187 * 8];
+    let mut reg: u16 = 0b100101010000000;
+    for slot in prbs.iter_mut() {
+        let mut b = 0u8;
+        for _ in 0..8 {
+            let bit = (((reg >> 14) ^ (reg >> 13)) & 1) as u8;
+            b = (b << 1) | bit;
+            reg = ((reg << 1) | bit as u16) & 0x7FFF;
+        }
+        *slot = b;
+    }
+    let mut out = packets;
+    let mut grp = 0usize;
+    while grp < n_pkt {
+        let mut k = 0usize;
+        for p in grp..(grp + 8).min(n_pkt) {
+            let base = p * 188;
+            out[base] = 0x47;
+            for j in 1..188 {
+                out[base + j] ^= prbs[k];
+                k += 1;
+            }
+        }
+        grp += 8;
+    }
+    out
+}
+
+/// Soft-decision Viterbi over the DVB-T K=7 trellis (G1=171₈, G2=133₈).
+#[pyfunction]
+fn viterbi_decode(soft_pairs: Vec<f64>, terminated: bool) -> Vec<u8> {
+    const NSTATES: usize = 64;
+    let t_len = soft_pairs.len() / 2;
+    if t_len == 0 {
+        return Vec::new();
+    }
+    // trellis: predecessors of each next-state (2 each)
+    let g1 = 0o171u32;
+    let g2 = 0o133u32;
+    let mut pred = [[0usize; 2]; NSTATES];
+    let mut pred_in = [[0u8; 2]; NSTATES];
+    let mut pred_outidx = [[0usize; 2]; NSTATES];
+    let mut filled = [0usize; NSTATES];
+    for s in 0..NSTATES {
+        for u in 0u8..2 {
+            let reg = ((u as u32) << 6) | s as u32;
+            let o0 = ((reg & g1).count_ones() & 1) as usize;
+            let o1 = ((reg & g2).count_ones() & 1) as usize;
+            let ns = (reg >> 1) as usize;
+            let slot = filled[ns];
+            filled[ns] += 1;
+            pred[ns][slot] = s;
+            pred_in[ns][slot] = u;
+            pred_outidx[ns][slot] = (o0 << 1) | o1;
+        }
+    }
+    // symbol per 2-bit output index, 0→+1 1→−1
+    let sym0: [f64; 4] = [1.0, 1.0, -1.0, -1.0]; // 1 - 2*((i>>1)&1)
+    let sym1: [f64; 4] = [1.0, -1.0, 1.0, -1.0]; // 1 - 2*(i&1)
+
+    const NEG: f64 = -1e18;
+    let mut pm = [NEG; NSTATES];
+    pm[0] = 0.0;
+    let mut tb = vec![[0u8; NSTATES]; t_len];
+    let mut prev = vec![[0u8; NSTATES]; t_len];
+
+    for t in 0..t_len {
+        let r0 = soft_pairs[2 * t];
+        let r1 = soft_pairs[2 * t + 1];
+        let bm = [
+            r0 * sym0[0] + r1 * sym1[0],
+            r0 * sym0[1] + r1 * sym1[1],
+            r0 * sym0[2] + r1 * sym1[2],
+            r0 * sym0[3] + r1 * sym1[3],
+        ];
+        let mut newpm = [0f64; NSTATES];
+        for ns in 0..NSTATES {
+            let c0 = pm[pred[ns][0]] + bm[pred_outidx[ns][0]];
+            let c1 = pm[pred[ns][1]] + bm[pred_outidx[ns][1]];
+            let choose = if c1 > c0 { 1 } else { 0 }; // numpy argmax → first max
+            newpm[ns] = if choose == 1 { c1 } else { c0 };
+            tb[t][ns] = pred_in[ns][choose];
+            prev[t][ns] = pred[ns][choose] as u8;
+        }
+        pm = newpm;
+    }
+
+    let mut end = 0usize;
+    if !terminated {
+        let mut best = pm[0];
+        for s in 1..NSTATES {
+            if pm[s] > best {
+                best = pm[s];
+                end = s;
+            }
+        }
+    }
+    let mut bits = vec![0u8; t_len];
+    let mut s = end;
+    for t in (0..t_len).rev() {
+        bits[t] = tb[t][s];
+        s = prev[t][s] as usize;
+    }
+    if terminated {
+        bits.truncate(t_len - 6); // K-1 = 6 flush bits
+    }
+    bits
+}
+
 #[pymodule]
 fn ares_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(sum_squares, m)?)?;
     m.add_function(wrap_pyfunction!(diffraction_db, m)?)?;
     m.add_function(wrap_pyfunction!(itm_hzns, m)?)?;
+    m.add_function(wrap_pyfunction!(rs_decode_204, m)?)?;
+    m.add_function(wrap_pyfunction!(dvb_derandomise, m)?)?;
+    m.add_function(wrap_pyfunction!(viterbi_decode, m)?)?;
     Ok(())
 }
