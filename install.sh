@@ -329,8 +329,9 @@ Options:
 
 Offline / vendored install:
   If ./vendor/wheels/ exists, Python deps install from it (no pip→network).
-  If ./vendor/npm/frontend/node_modules and ./vendor/npm/electron/node_modules
-  exist, the frontend + Electron trees are restored from them (no npm→network).
+  If ./vendor/npm/frontend/node_modules exists, the frontend tree is restored
+  from it (no npm→network). The desktop app is the Rust (Tauri) binary, built
+  with cargo; a cached cargo registry makes that step work offline too.
   Populate that bundle on a connected machine first with:  scripts/bundle_vendor.sh
 EOF
 }
@@ -1777,19 +1778,66 @@ log "Building frontend..."
 npm run build --silent
 ok "Frontend built"
 
-# ── 7. Electron (desktop app) ─────────────────────────────────────────────────
-log "Installing Electron desktop dependencies..."
-cd "$SCRIPT_DIR/electron"
-VENDOR_EL="$SCRIPT_DIR/vendor/npm/electron/node_modules"
-if [ -d "$VENDOR_EL" ] && [ -z "${ARES_VENDOR_REFRESH:-}" ]; then
-    ok "vendor/npm/electron/node_modules present ($(du -sh "$VENDOR_EL" 2>/dev/null | cut -f1)) — restoring offline"
-    rm -rf node_modules
-    if command -v rsync >/dev/null 2>&1; then rsync -a "$VENDOR_EL"/ node_modules/
-    else cp -a "$VENDOR_EL" node_modules; fi
-else
-    npm install --silent
+# ── 7. Desktop app (Tauri / Rust) ─────────────────────────────────────────────
+# The desktop app is the native Rust (Tauri) shell, not Electron. It compiles to
+# src-tauri/target/release/ares-desktop and spawns the backend itself. This block
+# runs on every install (initial and re-runs); cargo skips work when up to date.
+log "Building the Tauri (Rust) desktop app..."
+
+# 7a. Rust toolchain — pull in an existing rustup env, else install it.
+if ! command -v cargo >/dev/null 2>&1; then
+    [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 fi
-ok "Electron packages installed"
+if ! command -v cargo >/dev/null 2>&1; then
+    log "Rust toolchain not found — installing via rustup (minimal profile)..."
+    if command -v curl >/dev/null 2>&1; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- https://sh.rustup.rs | sh -s -- -y --profile minimal
+    else
+        warn "Neither curl nor wget available — cannot install Rust automatically."
+    fi
+    [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+fi
+
+# 7b. Tauri's native GUI libraries (webkit2gtk etc.). Best-effort per package
+# manager; macOS uses the system WebKit so no extra packages are needed there.
+if [ "$OS" = "Linux" ]; then
+    case "$PM" in
+        apt)
+            pm_refresh
+            apt_install build-essential curl wget file libssl-dev \
+                libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+                libayatana-appindicator3-dev libxdo-dev 2>/dev/null \
+                || warn "Some Tauri GUI deps failed to install — the build may fail."
+            ;;
+        dnf|yum)
+            maybe_sudo dnf install "${DNF_QUIET_OPTS[@]}" \
+                webkit2gtk4.1-devel gtk3-devel librsvg2-devel openssl-devel \
+                libappindicator-gtk3-devel libxdo-devel file \
+                gcc gcc-c++ make 2>/dev/null \
+                || warn "Some Tauri GUI deps failed to install — the build may fail."
+            ;;
+        pacman)
+            maybe_sudo pacman -Sy --noconfirm --needed \
+                webkit2gtk-4.1 gtk3 librsvg libayatana-appindicator \
+                openssl xdotool base-devel 2>/dev/null \
+                || warn "Some Tauri GUI deps failed to install — the build may fail."
+            ;;
+    esac
+fi
+
+# 7c. Compile the optimized desktop binary.
+TAURI_BIN="$SCRIPT_DIR/src-tauri/target/release/ares-desktop"
+if command -v cargo >/dev/null 2>&1; then
+    if ( cd "$SCRIPT_DIR/src-tauri" && cargo build --release ); then
+        ok "Tauri desktop binary built: $TAURI_BIN"
+    else
+        warn "Tauri build failed — see output above. The desktop shortcut will fall back to 'cargo run --release' on launch."
+    fi
+else
+    warn "Rust/cargo unavailable — skipping the Tauri build. Install rustup (https://rustup.rs) and re-run install.sh."
+fi
 
 # ── 8. Create startup scripts ─────────────────────────────────────────────────
 log "Creating startup scripts..."
@@ -1826,11 +1874,16 @@ chmod +x "$SCRIPT_DIR/start-web.sh"
 
 cat > "$SCRIPT_DIR/start-desktop.sh" << EOF
 #!/bin/bash
-# Ares — Start Electron desktop app
+# Ares — Start the Tauri (Rust) desktop app. The binary spawns the backend itself.
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-source "\$SCRIPT_DIR/backend/.venv/bin/activate"
-cd "\$SCRIPT_DIR/electron"
-exec npx electron . "\$@"
+BIN="\$SCRIPT_DIR/src-tauri/target/release/ares-desktop"
+if [ -x "\$BIN" ]; then
+    exec "\$BIN" "\$@"
+fi
+# Fallback when the prebuilt binary is missing: build+run from source.
+[ -f "\$HOME/.cargo/env" ] && . "\$HOME/.cargo/env"
+cd "\$SCRIPT_DIR/src-tauri"
+exec cargo run --release "\$@"
 EOF
 chmod +x "$SCRIPT_DIR/start-desktop.sh"
 
@@ -1849,12 +1902,21 @@ if [ "$OS" = "Linux" ]; then
         ICON_FILE="$ICON_DIR/icon.svg"
     fi
 
+    # Launch the native Rust binary directly when it exists; otherwise the
+    # start-desktop.sh launcher (which builds+runs from source).
+    TAURI_BIN="$SCRIPT_DIR/src-tauri/target/release/ares-desktop"
+    if [ -x "$TAURI_BIN" ]; then
+        EXEC_LINE="$TAURI_BIN"
+    else
+        EXEC_LINE="bash $SCRIPT_DIR/start-desktop.sh"
+    fi
+
     DESKTOP_CONTENT="[Desktop Entry]
 Version=1.0
 Type=Application
 Name=Ares
 Comment=RF propagation and geolocation platform
-Exec=bash $SCRIPT_DIR/start-desktop.sh
+Exec=$EXEC_LINE
 Icon=$ICON_FILE
 Terminal=false
 Categories=Science;Engineering;Education;
