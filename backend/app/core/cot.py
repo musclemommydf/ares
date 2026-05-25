@@ -302,6 +302,85 @@ async def publish_chat(msg: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 _LISTENERS: list = []
 
+# ── inbound LoB / fix CoT (external EW kit) ───────────────────────────────────
+# Re-ingest LoB (u-d-r) and fix (a-u-G-U-C-I) CoT broadcast by *other* sensors on
+# the bus as external observations. Ares's own published CoT (uid "ares-…") is
+# skipped so we never loop our own bearings back in. The sink is wired to the DF
+# solver in app.main; when unset, parsed tracks are dropped.
+_TRACK_SINK = None   # set_track_sink(fn): fn(dict)
+
+
+def set_track_sink(fn) -> None:
+    global _TRACK_SINK
+    _TRACK_SINK = fn
+
+
+def _cot_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    import math
+    dlon = math.radians(lon2 - lon1)
+    y = math.sin(dlon) * math.cos(math.radians(lat2))
+    x = (math.cos(math.radians(lat1)) * math.sin(math.radians(lat2)) -
+         math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.cos(dlon))
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def _parse_cot_track(xml_bytes: bytes) -> Optional[dict]:
+    """Parse an inbound LoB (``u-d-r``) or fix (``a-u-G-U-C-I``) CoT into a
+    normalised dict. Returns None for our own CoT, GeoChat, or anything else.
+
+      LoB → {kind:"lob", uid, lat, lon, azimuth_deg, remarks}
+      Fix → {kind:"fix", uid, lat, lon, cep_m, remarks}
+    """
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception:
+        return None
+    uid = str(root.get("uid", ""))
+    if uid.startswith("ares-"):          # our own published CoT — don't loop it back
+        return None
+    typ = str(root.get("type", ""))
+    pt = root.find("point")
+    if pt is None:
+        return None
+    try:
+        lat = float(pt.get("lat")); lon = float(pt.get("lon"))
+    except (TypeError, ValueError):
+        return None
+    detail = root.find("detail")
+    remarks = ""
+    if detail is not None:
+        r = detail.find("remarks")
+        remarks = (r.text or "") if r is not None else ""
+
+    if typ.startswith("u-d-r"):
+        # drawn route: first link point is the sensor, second is the bearing endpoint
+        pts: list[tuple[float, float]] = []
+        for ln in (detail.findall("link") if detail is not None else []):
+            p = ln.get("point")
+            if not p:
+                continue
+            try:
+                la, lo, *_ = p.split(",")
+                pts.append((float(la), float(lo)))
+            except ValueError:
+                pass
+        if len(pts) >= 2:
+            az = _cot_bearing(pts[0][0], pts[0][1], pts[1][0], pts[1][1])
+            return {"kind": "lob", "uid": uid, "lat": pts[0][0], "lon": pts[0][1],
+                    "azimuth_deg": az, "remarks": remarks}
+        return {"kind": "lob", "uid": uid, "lat": lat, "lon": lon, "remarks": remarks}
+
+    if typ.startswith(("a-u-G", "a-h-G")):     # unknown / hostile ground point ⇒ emitter fix
+        cep = None
+        try:
+            ce = float(pt.get("ce", "9999999"))
+            cep = ce if ce < 1e6 else None
+        except (TypeError, ValueError):
+            pass
+        return {"kind": "fix", "uid": uid, "lat": lat, "lon": lon, "cep_m": cep, "remarks": remarks}
+
+    return None
+
 
 def _parse_geochat(xml_bytes: bytes) -> Optional[dict]:
     try:
@@ -340,13 +419,20 @@ def _parse_geochat(xml_bytes: bytes) -> Optional[dict]:
 class _CotRxProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         m = _parse_geochat(data)
-        if not m:
+        if m:
+            try:
+                from app.core.chat import chat_hub
+                chat_hub.ingest_cot(**m)
+            except Exception:
+                log.debug("ingest_cot failed", exc_info=True)
             return
-        try:
-            from app.core.chat import chat_hub
-            chat_hub.ingest_cot(**m)
-        except Exception:
-            log.debug("ingest_cot failed", exc_info=True)
+        # not GeoChat — try an inbound LoB/fix from external EW kit
+        t = _parse_cot_track(data)
+        if t and _TRACK_SINK is not None:
+            try:
+                _TRACK_SINK(t)
+            except Exception:
+                log.debug("track sink failed", exc_info=True)
 
 
 async def start_cot_listener() -> None:

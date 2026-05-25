@@ -44,6 +44,9 @@ jobs:
       - name: MANET compact-codec harness (Track D / D2.1)
         working-directory: backend
         run: python -m tests.test_mesh_codec
+      - name: Inbound CoT LoB/fix harness (Track D / D1.4b)
+        working-directory: backend
+        run: python -m tests.test_cot_inbound
 
   frontend:
     name: frontend — bundle check
