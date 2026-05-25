@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "ares-native"
+version = "0.1.0"
+description = "Optional Rust acceleration for Ares hot paths (Track D, D4)"
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+
+[tool.maturin]
+module-name = "ares_native"
