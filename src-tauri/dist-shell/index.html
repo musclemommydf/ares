@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<!-- Splash shown while the backend boots. The real UI is the Ares backend itself
+     (http://127.0.0.1:8000), opened in a second window once /health is up; this
+     embedded page exists only so the Tauri bundler has a frontendDist. -->
+<html lang="en" style="background:#0d1117;margin:0;height:100%">
+  <head><meta charset="utf-8" /><title>Ares</title></head>
+  <body style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;font-family:system-ui,sans-serif;color:#8b949e;margin:0">
+    <div style="font-size:24px;color:#00b4d8;font-weight:700;letter-spacing:1px">Ares</div>
+    <div id="status" style="margin-top:12px;font-size:13px">Starting…</div>
+    <pre id="log" style="margin-top:14px;max-height:240px;width:78%;overflow:auto;font-size:11px;line-height:1.4;color:#6e7681;white-space:pre-wrap;background:#0b0f14;border:1px solid #21262d;border-radius:6px;padding:8px"></pre>
+    <script>
+      // withGlobalTauri is on, so window.__TAURI__ is available. D3.3 will emit
+      // these events from the Rust first-run bootstrap (venv / pip / npm build).
+      const ev = window.__TAURI__ && window.__TAURI__.event;
+      if (ev) {
+        ev.listen('ares://status', (e) => { document.getElementById('status').textContent = e.payload });
+        ev.listen('ares://log', (e) => {
+          const l = document.getElementById('log'); l.textContent += e.payload; l.scrollTop = l.scrollHeight;
+        });
+      }
+    </script>
+  </body>
+</html>

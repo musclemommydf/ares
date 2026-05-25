@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+#
+# Optional Rust acceleration for the hot paths (Track D, D4). Built into the
+# backend venv with maturin (scripts/build-native.sh); app.core.native falls back
+# to pure Python when the wheel is absent. Real ports (IQ pipeline, multi-VFO
+# channelizer, NIC modem, ITM inner loop) land here behind the D4 profiling
+# triggers documented in ROADMAP.md — this is the machinery, not a rewrite.
+[package]
+name = "ares-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "ares_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3 ⇒ one wheel works across Python 3.9+; extension-module ⇒ don't link libpython.
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }

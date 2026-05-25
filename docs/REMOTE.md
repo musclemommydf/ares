@@ -94,6 +94,9 @@ on `0.0.0.0:8000`, the UI is identical across them:
   front of `:8000` and browse `https://…`; the UI auto-uses `wss://` for sockets
   when served over HTTPS. CORS is open (`*`) but the serve-the-UI path is
   same-origin, so CORS doesn't enter the picture for the web client.
+- **Built-in TLS (no proxy):** set `ARES_TLS_CERT` + `ARES_TLS_KEY` to PEM paths
+  before `./start-backend.sh` and uvicorn serves HTTPS directly — handy on an
+  air-gapped appliance with a self-signed cert where you don't want a proxy.
 
 ## SDR hardware on the appliance
 

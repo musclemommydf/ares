@@ -119,6 +119,19 @@ _SYM1 = np.array([1 - 2 * (i & 1) for i in range(4)], dtype=np.float64)
 
 
 def viterbi_decode(soft_pairs, terminated: bool = True) -> list[int]:
+    """Soft-decision Viterbi (K=7). Rust fast path (D4) — a scalar trellis that
+    beats the per-timestep numpy ACS on small (64-state) arrays — with the numpy
+    implementation (viterbi_decode_py) as the fallback + parity ground truth."""
+    from app.core import native
+    if native.HAS_NATIVE:
+        try:
+            return native.viterbi_decode(soft_pairs, terminated)
+        except Exception:
+            pass
+    return viterbi_decode_py(soft_pairs, terminated)
+
+
+def viterbi_decode_py(soft_pairs, terminated: bool = True) -> list[int]:
     """Soft-decision Viterbi over the K=7 trellis. ``soft_pairs`` is a flat sequence
     of soft values (length 2·T): +ve ⇒ bit 0, −ve ⇒ bit 1, 0 ⇒ erasure. Vectorised
     add-compare-select across the 64 states. Returns the ML information bits."""

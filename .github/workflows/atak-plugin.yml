@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# ATAK plugin build matrix (Track D, D1.2).
+#
+# Builds the ARES ATAK-CIV plugin against each supported ATAK SDK line, the way
+# SOOTHSAYER ships one APK per line. The tak.gov SDK is NOT redistributable, so
+# this workflow is gated on an `ATAK_SDK_URL` repo secret (a private/authenticated
+# URL to the SDK zip) — without it, the build steps are skipped (the job still runs
+# and reports "SDK not configured"). Provide the secret, or use a self-hosted
+# runner with the SDK pre-staged, to produce APK artifacts.
+name: atak-plugin
+
+on:
+  push:
+    paths: ["atak-plugin/**", ".github/workflows/atak-plugin.yml"]
+  pull_request:
+    paths: ["atak-plugin/**"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: assembleCivDebug (ATAK ${{ matrix.atak }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        atak: ["5.3", "5.4", "5.5"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gate on SDK availability
+        id: gate
+        run: |
+          if [ -n "${{ secrets.ATAK_SDK_URL }}" ]; then
+            echo "have_sdk=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_sdk=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ATAK_SDK_URL secret not set — skipping the ${{ matrix.atak }} build."
+          fi
+
+      - name: Set up JDK 11 (Temurin)
+        if: steps.gate.outputs.have_sdk == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+
+      - name: Set up Android SDK
+        if: steps.gate.outputs.have_sdk == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Fetch + stage the ATAK-CIV SDK
+        if: steps.gate.outputs.have_sdk == 'true'
+        env:
+          ATAK_SDK_URL: ${{ secrets.ATAK_SDK_URL }}
+        run: |
+          mkdir -p "$HOME/atak-sdk"
+          curl -fsSL "$ATAK_SDK_URL" -o /tmp/atak-sdk.zip
+          unzip -q /tmp/atak-sdk.zip -d "$HOME/atak-sdk"
+          # local.properties points the takdev gradle plugin at the unzipped SDK.
+          {
+            echo "sdk.dir=$ANDROID_HOME"
+            echo "takdev.plugin=$(dirname "$(find "$HOME/atak-sdk" -name atak-gradle-takdev.jar | head -1)")"
+          } > atak-plugin/local.properties
+
+      - name: assembleCivDebug
+        if: steps.gate.outputs.have_sdk == 'true'
+        working-directory: atak-plugin
+        run: ./gradlew --no-daemon assembleCivDebug
+
+      - name: Upload APK
+        if: steps.gate.outputs.have_sdk == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ares-atak-${{ matrix.atak }}-civ-debug
+          path: atak-plugin/app/build/outputs/apk/civ/debug/*.apk
+          if-no-files-found: warn

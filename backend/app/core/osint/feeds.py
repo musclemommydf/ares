@@ -130,6 +130,13 @@ BUILTIN_FEEDS: dict[str, dict] = {
         "signup": "Open the Signal Cockpit map, find its data/export endpoint, paste the URL here.",
         "params": [],
     },
+    "aprs": {
+        "id": "aprs", "name": "APRS stations (local decode)", "category": "tracks",
+        "description": "Amateur APRS stations decoded locally from RF / a TNC (POST /aprs/decode). "
+                       "No external service — strictly local decode.",
+        "attribution": "local APRS decoder", "color": "#84cc16", "requires_config": False,
+        "big": True, "local": True, "params": [],
+    },
 }
 
 _FORMATS = ("auto", "geojson", "kml", "georss", "gpx")
@@ -680,10 +687,25 @@ async def _fetch_custom(fd, params, bbox, cfg) -> dict:
     return normalize(text, fd.get("format") or "auto")
 
 
+async def _fetch_aprs(fd, params, bbox, cfg) -> dict:
+    """Locally-decoded APRS stations (fed via POST /aprs/decode) → GeoJSON points."""
+    from app.core.decoders import aprs
+    feats = []
+    for st in aprs.decoder.stations.values():
+        if st.lat is None or st.lon is None:
+            continue
+        feats.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [st.lon, st.lat]},
+                      "properties": {"name": st.callsign, "symbol": st.symbol, "comment": st.comment,
+                                     "course_deg": st.course_deg, "speed_kt": st.speed_kt,
+                                     "altitude_ft": st.altitude_ft, "object": st.is_object,
+                                     "n_msgs": st.n_msgs, "kind": "aprs"}})
+    return _fc(feats)
+
+
 _FETCHERS = {
     "deepstate": _fetch_deepstate, "gdelt": _fetch_gdelt, "aircraft": _fetch_aircraft,
     "nasa_firms": _fetch_nasa_firms, "acled": _fetch_acled, "aisstream": _fetch_aisstream,
-    "liveuamap": _fetch_liveuamap, "signalcockpit": _fetch_signalcockpit,
+    "liveuamap": _fetch_liveuamap, "signalcockpit": _fetch_signalcockpit, "aprs": _fetch_aprs,
 }
 
 
@@ -744,8 +766,9 @@ async def fetch_feed(feed_id: str, *, bbox: Optional[list[float]] = None,
 
     cached = get_cached(feed_id)
 
-    # Offline / policy → serve cache only.
-    if settings.network_policy == "offline_only" or net_state.is_online() is not True:
+    # Offline / policy → serve cache only. Local feeds (e.g. APRS decoded on-box)
+    # are not network-bound, so they always run their fetcher.
+    if not fd.get("local") and (settings.network_policy == "offline_only" or net_state.is_online() is not True):
         if cached:
             m = cached["meta"]
             return {**m, "geojson": cached["geojson"], "source": "cache", "stale": True,

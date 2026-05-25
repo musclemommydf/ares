@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ARES radial-menu submenu (Track D, D1.3). Two buttons added to a map point's
+  radial menu; each fires a broadcast handled by AresMenuReceiver with the point
+  uid. Follows ATAK's menu-asset format; field names may need a tweak for the
+  exact target ATAK-CIV SDK line at build time.
+-->
+<menu>
+    <button
+        ref="ares_edit_rf"
+        action="com.ares.atak.plugin.EDIT_RF"
+        icon="icons/ic_ares.png"
+        selectable="false">
+        <state title="Edit RF" />
+    </button>
+    <button
+        ref="ares_add_lob"
+        action="com.ares.atak.plugin.ADD_LOB"
+        icon="icons/ic_ares.png"
+        selectable="false">
+        <state title="Add LoB from here" />
+    </button>
+</menu>

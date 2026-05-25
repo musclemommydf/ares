@@ -18,20 +18,22 @@ suspected-emitter CoT to the team via `CommsMapComponent`), `AresApiClient`
 (every route the plugin uses already exists in the backend). The skeleton's
 `TODO(...)` markers are gone.
 
-What's not done here:
-- **Build verification** — not compiled in this dev environment (no JDK / Android
-  SDK / Android Studio installed). The next step is to open the project on a
-  machine with Android Studio Dolphin+ and `./gradlew assembleCivDebug`.
-- **CoT receive subscription** — Co-Opt polls `MapView` positions instead of
-  subscribing to CoT events. That's deliberate (the refresh triggers are time
-  AND distance, so a CoT-driven loop has to dedupe back to the same conditions),
-  but if you want sensor-pushed updates a `CotServiceRemote.CotEventListener`
-  hook lands in `AresMapComponent.onCreate`.
-- **Radial-menu items** — "Edit RF" / "Add LoB from here" — the plumbing is
-  there (`AresDropDownReceiver.runCoverageRaw`, `DfManager.addLoB`), but no
-  `MenuMapAdapter` entries yet.
-- **CI matrix** — SOOTHSAYER ships one APK per supported ATAK SDK line
-  (~5.3 / 5.4 / 5.5). Budget the same.
+Status of the Track D / D1 items:
+- **Build verification (D1.1)** — *still pending*: not compiled in this dev
+  environment (no JDK / Android SDK / tak.gov SDK). Open on a machine with Android
+  Studio Dolphin+ and `./gradlew assembleCivDebug`.
+- **CI matrix (D1.2)** — *added*: `.github/workflows/atak-plugin.yml` builds
+  `assembleCivDebug` across ATAK 5.3 / 5.4 / 5.5, gated on an `ATAK_SDK_URL` repo
+  secret (the SDK isn't redistributable) or a self-hosted runner.
+- **Radial-menu items (D1.3)** — *implemented, pending build*: `AresMenuReceiver`
+  + `assets/menus/menu_ares_point.xml` define "Edit RF" / "Add LoB from here" and
+  route the tapped point into the pane (`runCoverageRaw` / `DfManager.addLoB`).
+  The one remaining SDK-line-specific call is registering the menu asset on a
+  point's radial via `MenuMapAdapter` / `MapMenuReceiver` (TODO in `onCreate`).
+- **CoT receive (D1.4a)** — *implemented, pending build*: a
+  `CotServiceRemote.CotEventListener` in `AresMapComponent.onCreate` forwards
+  foreign emitter CoT into the pane (the substantive parse/fuse also runs
+  server-side — backend D1.4b, `cot._parse_cot_track`, which is unit-tested).
 
 ## Prerequisites
 

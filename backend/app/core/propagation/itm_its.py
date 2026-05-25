@@ -603,36 +603,57 @@ class IrregularTerrainModel:
         dh = dh / (1.0 - 0.8 * math.exp(-(x2 - x1) / 50e3))
         return max(0.0, dh)
 
-    def _hzns(self, pfl: Sequence[float]) -> None:
-        prop = self.prop
+    @staticmethod
+    def _hzns_core(pfl: Sequence[float], hg0: float, hg1: float,
+                   gme: float, dist: float):
+        """Pure-Python horizon analysis → (the0, the1, dl0, dl1). Sequential (the
+        running sa/sb sums + early-exit flag can't be vectorised) — this is the
+        ITM loop the Rust port (native.itm_hzns) accelerates; kept as the fallback
+        + parity ground truth (test_native_parity)."""
         np_ = int(pfl[0])
         xi = pfl[1]
-        za = pfl[2] + prop.hg[0]
-        zb = pfl[np_ + 2] + prop.hg[1]
-        qc = 0.5 * prop.gme
-        q = qc * prop.dist
-        prop.the[1] = (zb - za) / prop.dist
-        prop.the[0] = prop.the[1] - q
-        prop.the[1] = -prop.the[1] - q
-        prop.dl[0] = prop.dist
-        prop.dl[1] = prop.dist
+        za = pfl[2] + hg0
+        zb = pfl[np_ + 2] + hg1
+        qc = 0.5 * gme
+        q = qc * dist
+        the1 = (zb - za) / dist
+        the0 = the1 - q
+        the1 = -the1 - q
+        dl0 = dist
+        dl1 = dist
         if np_ >= 2:
             sa = 0.0
-            sb = prop.dist
+            sb = dist
             wq = True
             for i in range(1, np_):
                 sa += xi
                 sb -= xi
-                q = pfl[i + 2] - (qc * sa + prop.the[0]) * sa - za
+                q = pfl[i + 2] - (qc * sa + the0) * sa - za
                 if q > 0.0:
-                    prop.the[0] += q / sa
-                    prop.dl[0] = sa
+                    the0 += q / sa
+                    dl0 = sa
                     wq = False
                 if not wq:
-                    q = pfl[i + 2] - (qc * sb + prop.the[1]) * sb - zb
+                    q = pfl[i + 2] - (qc * sb + the1) * sb - zb
                     if q > 0.0:
-                        prop.the[1] += q / sb
-                        prop.dl[1] = sb
+                        the1 += q / sb
+                        dl1 = sb
+        return the0, the1, dl0, dl1
+
+    def _hzns(self, pfl: Sequence[float]) -> None:
+        prop = self.prop
+        from app.core import native
+        if native.HAS_NATIVE:
+            try:
+                the0, the1, dl0, dl1 = native.itm_hzns(pfl, prop.hg[0], prop.hg[1], prop.gme, prop.dist)
+            except Exception:
+                the0, the1, dl0, dl1 = self._hzns_core(pfl, prop.hg[0], prop.hg[1], prop.gme, prop.dist)
+        else:
+            the0, the1, dl0, dl1 = self._hzns_core(pfl, prop.hg[0], prop.hg[1], prop.gme, prop.dist)
+        prop.the[0] = the0
+        prop.the[1] = the1
+        prop.dl[0] = dl0
+        prop.dl[1] = dl1
 
     def qlrps(self, fmhz: float, zsys: float, en0: float, ipol: int, eps: float, sgm: float) -> None:
         """Prepare prop from RF + ground siting (the 'qlrps' reference routine)."""

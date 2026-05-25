@@ -387,6 +387,16 @@ def compute_diffraction_db(elevations: Sequence[float],
     Compute terrain diffraction loss for a given profile and model.
     Returns dB (positive = additional attenuation).
     """
+    # Rust fast path (Track D, D4) — the whole module is scalar per-point math on
+    # the per-pixel coverage path; the Python functions below are the fallback +
+    # parity ground truth (see test_native_parity).
+    from app.core import native
+    if native.HAS_NATIVE:
+        try:
+            return native.diffraction_db(model, elevations, distances_m,
+                                         tx_height_m, rx_height_m, freq_hz)
+        except Exception:
+            pass
     fn = DIFFRACTION_MODELS.get(model, deygout_db)
     try:
         return fn(elevations, distances_m, tx_height_m, rx_height_m, freq_hz)

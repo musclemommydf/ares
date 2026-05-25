@@ -308,9 +308,25 @@ new `…/core/detect/`.
 - Signal ID: [sigidwiki.com](https://www.sigidwiki.com/) — the source for the Track-B DB.
 - Course (paid): SANS SEC617 — Wireless Penetration Testing.
 
+### 4. Systems language → **Rust** (the platform layer Ares is moving toward)
+Track D replaces the Electron shell with **Tauri** (Rust), and the D4 plan oxidizes the
+real-time hot paths into Rust via **PyO3**. You don't need Rust to read most of Ares, but
+you need it for the platform/perf work. *Read alongside:* `src-tauri/` (the new desktop
+shell) vs `electron/main.js` (what it replaces); later the PyO3 candidates in
+`…/sdr/live_df.py`.
+- **Start here:** [*The Rust Programming Language* — "the Book"](https://doc.rust-lang.org/book/) (free, official).
+- Practice: [Rustlings](https://github.com/rust-lang/rustlings) (guided exercises) +
+  [Rust by Example](https://doc.rust-lang.org/rust-by-example/).
+- Reference depth: *Programming Rust* (Blandy, Orendorff & Tindall, O'Reilly).
+- For Ares specifically: [Tauri v2 docs](https://v2.tauri.app/) (the desktop shell, D3) and
+  the [PyO3 user guide](https://pyo3.rs/) (calling Rust from Python — the D4 oxidation path).
+- Concurrency, which is *why* Rust helps the IQ pipeline: the
+  [Tokio tutorial](https://tokio.rs/tokio/tutorial) and *Rust Atomics and Locks*
+  (Mara Bos — free online).
+
 **A path through it:** Python → PySDR (ties Python to DSP) → *Inside Radio* (ties DSP to
-the threats). At each step, open the Ares file listed under that topic and read the code
-next to the theory.
+the threats), then Rust (the Book → Tauri/PyO3) once you reach Track D. At each step, open
+the Ares file listed under that topic and read the code next to the theory.
 
 ---
 

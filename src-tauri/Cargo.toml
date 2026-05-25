@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# Copyright (c) 2026 Ares
+[package]
+name = "ares-desktop"
+version = "5.2.0"
+description = "Ares desktop shell (Tauri) — Track D / D3"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# "termination" ⇒ the handler also fires on SIGTERM / SIGHUP, not just SIGINT.
+ctrlc = { version = "3", features = ["termination"] }
+# Tiny blocking HTTP client — used only for the /health poll and the admin-token
+# login on loopback. No "json" feature: we serialise/parse with serde_json so the
+# dependency surface stays minimal.
+ureq = "2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
