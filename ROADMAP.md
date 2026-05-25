@@ -186,6 +186,26 @@ into the targets tracker; spectrum comes from Track A's sweep.
   splash, first-run venv/npm. **Hardest part = the WebSocket upgrade/forward** for
   `/api/v1/sdr/stream` & audio (Tokio-tungstenite). Keep Electron shipping until Tauri
   reaches parity; ~40 MB vs ~150 MB bundle is the payoff.
+- **D4 — Selective Rust oxidation (PyO3), not a rewrite.** Keep Python as the
+  orchestration / API / ecosystem layer (numpy/scipy, SoapySDR, pyadi-iio, gr-gsm,
+  ONNX, the external decoders — the breadth that makes Ares possible lives here). Move
+  *only* the paths below into Rust via PyO3, **each gated on a profiling trigger** so we
+  oxidize on evidence, not faith. `docs/Ares.md` already anticipates this with its
+  "PyO3/Rust accelerator fallback" for ITM.
+
+  | Candidate | File(s) | Why Rust | Profiling trigger to justify it |
+  |---|---|---|---|
+  | Real-time multi-channel IQ pipeline | `…/sdr/live_df.py`, `…/sdr/manager.py` | GIL-bound when driving several radios at once; needs predictable, GC-free latency | dropped-frame rate climbs (see `sdr_health`) or CPU saturates with ≥2 coherent radios |
+  | Multi-VFO channelizer / squelch | `…/sdr/` (VFO carve-out) | many small per-frame ops dominated by Python glue, not numpy C calls | per-VFO overhead > ~10–15% of frame budget when running many narrowband channels |
+  | DBPSK NIC modem (TAP/TUN over RF) | `…/sdr/tap_nic` | tight real-time mod/demod loop; throughput- and latency-sensitive | link throughput capped by CPU rather than the radio/SNR |
+  | ITM inner loop | `…/core/propagation/` | already flagged as a Rust-accelerator candidate; embarrassingly parallel per-pixel | per-pixel raster / Monte-Carlo dominates wall-clock **and** no CuPy GPU present |
+
+  **Explicitly NOT oxidized:** the DF linear algebra (`df/algorithms.py` — already
+  LAPACK/FFTW under numpy; Rust likely *slower* unless bound to the same BLAS), and the
+  external decoders (dsd-fme / gr-gsm / sniffers — they're separate C/C++ processes, so
+  rewriting our Python glue wouldn't remove their memory-safety risk anyway). Note also
+  that Python 3.13+ free-threading erodes the GIL argument over time — re-check the IQ
+  candidate against a no-GIL interpreter before committing to the port.
 
 ---
 
@@ -221,6 +241,8 @@ log:
    **B2 satphone**, **C6 pentest devices** (gated).
 5. Last / blocked: **D1 ATAK compile** (SDK-blocked), **A5 18 GHz** (hardware-blocked),
    **B3 TEMPEST** (research).
+6. **D4 oxidation is not scheduled** — port a path only when its profiling trigger fires.
+   The one exception is the Tauri shell (D3), which is worth doing on its own merits.
 
 ---
 
