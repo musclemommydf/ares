@@ -47,6 +47,9 @@ jobs:
       - name: Inbound CoT LoB/fix harness (Track D / D1.4b)
         working-directory: backend
         run: python -m tests.test_cot_inbound
+      - name: Mesh transports harness — Meshtastic + Silvus (Track D / D2.2-2.3)
+        working-directory: backend
+        run: python -m tests.test_mesh_transports
 
   frontend:
     name: frontend — bundle check
