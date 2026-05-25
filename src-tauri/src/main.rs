@@ -469,13 +469,19 @@ fn boot(handle: tauri::AppHandle) {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // Single-instance applies only to the default instance. A port-overridden build
+    // (ARES_DESKTOP_PORT, e.g. the separate "Cyber" app) skips it so it can run
+    // alongside the default rather than just focusing its window.
+    if std::env::var("ARES_DESKTOP_PORT").is_err() {
         // single-instance must be the first plugin registered.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_focus();
             }
-        }))
+        }));
+    }
+    builder
         .setup(|app| {
             let config_dir = app.path().app_config_dir().unwrap_or_else(|_| PathBuf::from("."));
             let state = AppState {
