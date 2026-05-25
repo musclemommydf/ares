@@ -8,7 +8,7 @@ Rough road-map:
 
 -Signalhound, AD-FMCOMMS5 support
 
--Tactical FPGA host compatibility (Matchstiq X40, ZC706 SoC)
+-Tactical FPGA host compatibility (Matchstiq X40, ZC706 SoC, Jetson)
 
 -ATAK plugin/server development
 
