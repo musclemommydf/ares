@@ -26,7 +26,7 @@ Rough road-map:
 
 -Malicious signals identification: IMSI-catcher detection (rogue eNodeB identification), GPS/Cell jamming/spoofing, TPMS trackers, Cellular downgrade attacks, Cell/PTT Denial of Service, Evil twin APs, Deauth flood attacks, Rogue airtag, replay attacks, drone swarms,sub-carrier hides, Rogue FM/ISM band, pentest device identification
 
--Pentest: Flipper zero/HackRF/H4M/Proxmark3 capabilities
+-Pentest: Sub-GHz scan/record/replay ISM bursts (remotes, sensors, FOBs), RFID read/clone/emulate 125kHz proximity credentials, NFC/RFID high frequency read/emulate/sniff 13.56 MHz NFC/contactless cards
 
 -18GHz downconversion for FMCOMMS5 (long-term goal)
 
