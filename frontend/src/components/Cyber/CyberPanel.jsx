@@ -11,7 +11,7 @@
  * actions (replay/transmit/emulate/clone/write/run) are refused by the backend
  * unless the Authorized-Active gate is on, and every attempt is audit-logged.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Bug, ShieldAlert, ShieldCheck, Lock, Unlock, Terminal } from 'lucide-react'
 import {
   getCyberCapabilities, detectCyber, getCyberAuthorized, setCyberAuthorized,
@@ -223,7 +223,7 @@ function GateCard({ authorized, ack, setAck, busy, onToggle, error }) {
 }
 
 
-function CapabilityCard({ cat, authorized, available, captures, onAfterCapture }) {
+const CapabilityCard = memo(function CapabilityCard({ cat, authorized, available, captures, onAfterCapture }) {
   const [params, setParams] = useState({ center_mhz: '433.92', seconds: '1', value: '0' })
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
@@ -314,7 +314,7 @@ function CapabilityCard({ cat, authorized, available, captures, onAfterCapture }
       {result && <ResultView cat={cat} result={result} />}
     </div>
   )
-}
+})
 
 function ResultView({ cat, result }) {
   // Sub-GHz scan → mini spectrum sparkline.
