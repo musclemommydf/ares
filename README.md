@@ -12,7 +12,7 @@ Mapping features, including lines-of-bearing, geolocated emitters, RF propagatio
 
 Demodulation/decode of UAS video, cellular, Wi-Fi (SDR acting as NIC over TAP), PTT, FM radio are all open-source (primarily GNU Radio- and Kismet-based), passive and do not break any forms of encryption or privacy laws. 
 
-Ares is also designed for MANET operations to enable distributed sensing with collaborative DF and group-chat functionality. This includes MANET planning with RF propagation simulation to ensure link coverage. 
+Ares is also designed for MANET operations to enable distributed sensing with collaborative DF, remote operations and group-chat functionality. This includes MANET planning with RF propagation simulation to ensure link coverage. 
 
 Ares can also import OSINT feeds from a variety of sources, preset and custom. 
 
